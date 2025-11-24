@@ -1,18 +1,13 @@
 const cors = require("cors")
+const logger = require("winston") // Assuming winston is used for logging
 
 // Configuración de CORS mejorada
 const corsOptions = {
   origin: (origin, callback) => {
     // Lista de orígenes permitidos
+    const frontendUrl = process.env.FRONTEND_URL
     const allowedOrigins = [
-      process.env.FRONTEND_URL || "http://localhost:5173",
-      "http://localhost:3000",
-      "http://localhost:3001",
-      "http://localhost:5173",
-      "http://127.0.0.1:3000",
-      "http://127.0.0.1:3001",
-      "http://127.0.0.1:5173",
-    ]
+      frontendUrl,]
 
     if (process.env.NODE_ENV === "development") {
       return callback(null, true)
@@ -25,7 +20,7 @@ const corsOptions = {
     if (allowedOrigins.includes(origin)) {
       callback(null, true)
     } else {
-      console.warn(`CORS blocked origin: ${origin}`)
+      logger.warn(`CORS blocked origin: ${origin}`)
       callback(new Error("No permitido por política CORS"), false)
     }
   },

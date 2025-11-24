@@ -27,7 +27,6 @@ const serviciosController = {
                suc.nombre as sucursal_nombre,
                u.nombre as usuario_nombre,
                sc.estado AS sesion_caja_estado,
-               COUNT(si.id) as items_count,
                s.total,
                s.tipo_pago
         FROM servicios s
@@ -36,11 +35,14 @@ const serviciosController = {
         LEFT JOIN sucursales suc ON s.sucursal_id = suc.id
         LEFT JOIN usuarios u ON s.usuario_id = u.id
         LEFT JOIN sesiones_caja sc ON s.sesion_caja_id = sc.id
-        LEFT JOIN servicio_items si ON s.id = si.servicio_id
         WHERE s.activo = true`
+
       let countQuery = "SELECT COUNT(DISTINCT s.id) as total FROM servicios s WHERE s.activo = true"
       const queryParams = []
       const countParams = []
+
+      const itemsCountQuery = `(SELECT COUNT(*) FROM servicio_items si2 WHERE si2.servicio_id = s.id) as items_count`
+      query = query.replace("s.tipo_pago", `s.tipo_pago, ${itemsCountQuery}`)
 
       // Filtro de búsqueda
       if (search) {
@@ -119,7 +121,7 @@ const serviciosController = {
         countParams.push(fecha_hasta)
       }
 
-      query += ` GROUP BY s.id ORDER BY s.created_at DESC LIMIT ${limitNum} OFFSET ${offset}`
+      query += ` ORDER BY s.created_at DESC LIMIT ${limitNum} OFFSET ${offset}`
 
       const [servicios] = await db.pool.execute(query, queryParams)
       const [countResult] = await db.pool.execute(countQuery, countParams)

@@ -232,11 +232,26 @@ const cleanExpiredSessions = async () => {
     const query = `DELETE FROM sesiones WHERE expires_at < NOW() OR activo = 0`
     await db.query(query)
   } catch (error) {
-    console.error("Error cleaning expired sessions:", error)
+    // Only log to file in development, not console in production
+    if (process.env.NODE_ENV === "development") {
+      console.error("Error cleaning expired sessions:", error.message)
+    }
   }
 }
 
-setInterval(cleanExpiredSessions, 60 * 60 * 1000)
+let cleanupIntervalId = null
+
+const startCleanupInterval = () => {
+  if (cleanupIntervalId) return // Prevent duplicate intervals
+  cleanupIntervalId = setInterval(cleanExpiredSessions, 60 * 60 * 1000) // Every hour
+}
+
+const stopCleanupInterval = () => {
+  if (cleanupIntervalId) {
+    clearInterval(cleanupIntervalId)
+    cleanupIntervalId = null
+  }
+}
 
 module.exports = {
   authenticateToken,
@@ -248,6 +263,8 @@ module.exports = {
   invalidateSession,
   cleanExpiredSessions,
   logAccess,
+  startCleanupInterval,
+  stopCleanupInterval,
   verifyToken: authenticateToken,
   verifyRole: requireRole,
   verifyAdmin: requireAdmin,

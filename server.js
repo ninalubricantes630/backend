@@ -19,6 +19,7 @@ try {
 const { corsMiddleware } = require("./src/config/cors")
 const { notFoundHandler, globalErrorHandler, requestLogger, securityHeaders } = require("./src/middleware/errorHandler")
 const db = require("./src/config/database")
+const { startCleanupInterval, stopCleanupInterval } = require("./src/middleware/auth")
 
 const app = express()
 const PORT = process.env.PORT || 4485
@@ -43,6 +44,11 @@ app.use(
       includeSubDomains: true,
       preload: true,
     },
+    frameguard: {
+      action: "deny",
+    },
+    noSniff: true,
+    xssFilter: true,
   }),
 )
 
@@ -176,6 +182,8 @@ const initializeServer = async () => {
       process.exit(1)
     }
 
+    startCleanupInterval()
+
     // Mostrar estadísticas de la base de datos
     const stats = await db.getStats()
     if (stats) {
@@ -194,6 +202,7 @@ const initializeServer = async () => {
 
 process.on("SIGTERM", async () => {
   logger.info("SIGTERM recibido, cerrando servidor...")
+  stopCleanupInterval()
   await db.closePool()
   if (server) {
     server.close(() => {
@@ -205,6 +214,7 @@ process.on("SIGTERM", async () => {
 
 process.on("SIGINT", async () => {
   logger.info("SIGINT recibido, cerrando servidor...")
+  stopCleanupInterval()
   await db.closePool()
   if (server) {
     server.close(() => {
@@ -230,9 +240,10 @@ const startServer = async () => {
   server = app.listen(PORT, () => {
     logger.info("Servidor Nina Lubricantes iniciado", {
       port: PORT,
-      environment: process.env.NODE_ENV || "development",
-      apiUrl: `http://localhost:${PORT}/api`,
-      corsUrl: process.env.FRONTEND_URL || "http://localhost:3000",
+      environment: process.env.NODE_ENV,
+      apiUrl: process.env.FRONTEND_URL,
+      corsUrl: process.env.FRONTEND_URL,
+      timestamp: new Date().toISOString(),
     })
   })
 
