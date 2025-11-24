@@ -5,8 +5,8 @@ const db = require("../config/database")
 const getUsers = async (req, res) => {
   try {
     // Parseo y validación estricta de los parámetros de paginación
-    const page = Math.max(1, parseInt(req.query.page, 10) || 1)
-    let limit = parseInt(req.query.limit, 10)
+    const page = Math.max(1, Number.parseInt(req.query.page, 10) || 1)
+    let limit = Number.parseInt(req.query.limit, 10)
     if (!Number.isInteger(limit) || limit <= 0) {
       limit = 10
     }
@@ -25,30 +25,65 @@ const getUsers = async (req, res) => {
 
     // Filtro por búsqueda (nombre o email)
     if (search) {
-      whereClause += " AND (nombre LIKE ? OR email LIKE ?)"
+      whereClause += " AND (u.nombre LIKE ? OR u.email LIKE ?)"
       params.push(`%${search}%`, `%${search}%`)
     }
 
     // Filtro por rol
     if (rol) {
-      whereClause += " AND rol = ?"
+      whereClause += " AND u.rol = ?"
       params.push(rol)
     }
 
-    // Construyo la consulta inyectando limit/offset validados (enteros controlados)
     const usersSql = `
-      SELECT id, nombre, email, rol, activo, creado_en, ultimo_login
-      FROM usuarios
+      SELECT 
+        u.id, 
+        u.nombre, 
+        u.email, 
+        u.rol, 
+        u.activo, 
+        u.creado_en, 
+        u.ultimo_login,
+        GROUP_CONCAT(
+          DISTINCT CONCAT(us.sucursal_id, ':', s.nombre, ':', IF(us.es_principal, '1', '0'))
+          ORDER BY us.es_principal DESC, s.nombre
+          SEPARATOR '|'
+        ) as sucursales_info
+      FROM usuarios u
+      LEFT JOIN usuario_sucursales us ON u.id = us.usuario_id
+      LEFT JOIN sucursales s ON us.sucursal_id = s.id AND s.activo = 1
       ${whereClause}
-      ORDER BY creado_en DESC
+      GROUP BY u.id
+      ORDER BY u.creado_en DESC
       LIMIT ${limitInt} OFFSET ${offsetInt}
     `
 
     // Ejecutar consulta de usuarios (params solo para los filtros)
     const [users] = await db.pool.execute(usersSql, params)
 
+    const usersWithSucursales = users.map((user) => {
+      const sucursales = []
+      if (user.sucursales_info) {
+        const sucursalesArray = user.sucursales_info.split("|")
+        sucursalesArray.forEach((info) => {
+          const [id, nombre, esPrincipal] = info.split(":")
+          sucursales.push({
+            id: Number.parseInt(id),
+            nombre: nombre,
+            es_principal: esPrincipal === "1",
+          })
+        })
+      }
+
+      return {
+        ...user,
+        sucursales,
+        sucursales_info: undefined, // Eliminar el campo temporal
+      }
+    })
+
     // Consulta para total de registros (usa los mismos params de filtro)
-    const countSql = `SELECT COUNT(*) as total FROM usuarios ${whereClause}`
+    const countSql = `SELECT COUNT(*) as total FROM usuarios u ${whereClause}`
     const [totalResult] = await db.pool.execute(countSql, params)
 
     const total = totalResult && totalResult[0] ? Number(totalResult[0].total) : 0
@@ -57,12 +92,12 @@ const getUsers = async (req, res) => {
     return res.json({
       success: true,
       data: {
-        users,
+        users: usersWithSucursales,
         pagination: {
-          currentPage: page,
+          page,
+          limit: limitInt,
+          total,
           totalPages,
-          totalItems: total,
-          itemsPerPage: limitInt,
         },
       },
     })
@@ -84,21 +119,35 @@ const getUsers = async (req, res) => {
 
 // Crear usuario (solo admin)
 const createUser = async (req, res) => {
+  const connection = await db.pool.getConnection()
+
   try {
-    const { nombre, email, password, rol } = req.body
+    await connection.beginTransaction()
+
+    const { nombre, email, password, rol, sucursales } = req.body
 
     // Validar campos requeridos
     if (!nombre || !email || !password || !rol) {
+      await connection.rollback()
       return res.status(400).json({
         success: false,
         message: "Todos los campos son requeridos",
       })
     }
 
+    if (!sucursales || !Array.isArray(sucursales) || sucursales.length === 0) {
+      await connection.rollback()
+      return res.status(400).json({
+        success: false,
+        message: "Debe asignar al menos una sucursal al usuario",
+      })
+    }
+
     // Verificar si el email ya existe
-    const [existingUsers] = await db.pool.execute("SELECT id FROM usuarios WHERE email = ?", [email])
+    const [existingUsers] = await connection.execute("SELECT id FROM usuarios WHERE email = ?", [email])
 
     if (existingUsers.length > 0) {
+      await connection.rollback()
       return res.status(400).json({
         success: false,
         message: "El email ya está registrado",
@@ -110,50 +159,109 @@ const createUser = async (req, res) => {
     const hashedPassword = await bcrypt.hash(password, saltRounds)
 
     // Crear usuario
-    const [result] = await db.pool.execute(
+    const [result] = await connection.execute(
       `INSERT INTO usuarios (nombre, email, password, rol, activo, creado_en)
        VALUES (?, ?, ?, ?, 1, NOW())`,
       [nombre, email, hashedPassword, rol],
     )
 
-    // Obtener el usuario creado
-    const [newUser] = await db.pool.execute(
-      "SELECT id, nombre, email, rol, activo, creado_en FROM usuarios WHERE id = ?",
-      [result.insertId],
+    const userId = result.insertId
+
+    for (const sucursal of sucursales) {
+      await connection.execute(
+        `INSERT INTO usuario_sucursales (usuario_id, sucursal_id, es_principal)
+         VALUES (?, ?, ?)`,
+        [userId, sucursal.sucursal_id, sucursal.es_principal || false],
+      )
+    }
+
+    await connection.commit()
+
+    // Obtener el usuario creado con sus sucursales
+    const [newUser] = await connection.execute(
+      `SELECT 
+        u.id, u.nombre, u.email, u.rol, u.activo, u.creado_en,
+        GROUP_CONCAT(
+          DISTINCT CONCAT(us.sucursal_id, ':', s.nombre, ':', IF(us.es_principal, '1', '0'))
+          ORDER BY us.es_principal DESC, s.nombre
+          SEPARATOR '|'
+        ) as sucursales_info
+      FROM usuarios u
+      LEFT JOIN usuario_sucursales us ON u.id = us.usuario_id
+      LEFT JOIN sucursales s ON us.sucursal_id = s.id
+      WHERE u.id = ?
+      GROUP BY u.id`,
+      [userId],
     )
+
+    // Procesar sucursales
+    const user = newUser[0]
+    const sucursalesArray = []
+    if (user.sucursales_info) {
+      const sucursalesInfoArray = user.sucursales_info.split("|")
+      sucursalesInfoArray.forEach((info) => {
+        const [id, nombre, esPrincipal] = info.split(":")
+        sucursalesArray.push({
+          id: Number.parseInt(id),
+          nombre: nombre,
+          es_principal: esPrincipal === "1",
+        })
+      })
+    }
 
     return res.status(201).json({
       success: true,
       message: "Usuario creado exitosamente",
-      data: newUser[0],
+      data: {
+        ...user,
+        sucursales: sucursalesArray,
+        sucursales_info: undefined,
+      },
     })
   } catch (error) {
+    await connection.rollback()
     console.error("Error al crear usuario:", error)
     return res.status(500).json({
       success: false,
       message: "Error interno del servidor",
     })
+  } finally {
+    connection.release()
   }
 }
 
 // Actualizar usuario (solo admin)
 const updateUser = async (req, res) => {
+  const connection = await db.pool.getConnection()
+
   try {
+    await connection.beginTransaction()
+
     const { id } = req.params
-    const { nombre, email, rol, activo } = req.body
+    const { nombre, email, password, rol, activo, sucursales } = req.body
 
     // Validar campos requeridos
     if (!nombre || !email || !rol) {
+      await connection.rollback()
       return res.status(400).json({
         success: false,
         message: "Nombre, email y rol son requeridos",
       })
     }
 
+    if (!sucursales || !Array.isArray(sucursales) || sucursales.length === 0) {
+      await connection.rollback()
+      return res.status(400).json({
+        success: false,
+        message: "Debe asignar al menos una sucursal al usuario",
+      })
+    }
+
     // Verificar si el usuario existe
-    const [existingUsers] = await db.pool.execute("SELECT id FROM usuarios WHERE id = ?", [id])
+    const [existingUsers] = await connection.execute("SELECT id FROM usuarios WHERE id = ?", [id])
 
     if (existingUsers.length === 0) {
+      await connection.rollback()
       return res.status(404).json({
         success: false,
         message: "Usuario no encontrado",
@@ -161,9 +269,10 @@ const updateUser = async (req, res) => {
     }
 
     // Verificar si el email ya existe en otro usuario
-    const [emailCheck] = await db.pool.execute("SELECT id FROM usuarios WHERE email = ? AND id != ?", [email, id])
+    const [emailCheck] = await connection.execute("SELECT id FROM usuarios WHERE email = ? AND id != ?", [email, id])
 
     if (emailCheck.length > 0) {
+      await connection.rollback()
       return res.status(400).json({
         success: false,
         message: "El email ya está registrado por otro usuario",
@@ -173,31 +282,87 @@ const updateUser = async (req, res) => {
     // Normalizar activo a 0/1
     const activoValue = activo === undefined ? 1 : activo ? 1 : 0
 
-    // Actualizar usuario
-    await db.pool.execute(
-      `UPDATE usuarios
-       SET nombre = ?, email = ?, rol = ?, activo = ?, actualizado_en = NOW()
-       WHERE id = ?`,
-      [nombre, email, rol, activoValue, id],
-    )
+    if (password && password.trim() !== "") {
+      const saltRounds = 12
+      const hashedPassword = await bcrypt.hash(password, saltRounds)
 
-    // Obtener el usuario actualizado
-    const [updatedUser] = await db.pool.execute(
-      "SELECT id, nombre, email, rol, activo, creado_en, actualizado_en FROM usuarios WHERE id = ?",
+      await connection.execute(
+        `UPDATE usuarios
+         SET nombre = ?, email = ?, password = ?, rol = ?, activo = ?, actualizado_en = NOW()
+         WHERE id = ?`,
+        [nombre, email, hashedPassword, rol, activoValue, id],
+      )
+    } else {
+      await connection.execute(
+        `UPDATE usuarios
+         SET nombre = ?, email = ?, rol = ?, activo = ?, actualizado_en = NOW()
+         WHERE id = ?`,
+        [nombre, email, rol, activoValue, id],
+      )
+    }
+
+    await connection.execute("DELETE FROM usuario_sucursales WHERE usuario_id = ?", [id])
+
+    for (const sucursal of sucursales) {
+      await connection.execute(
+        `INSERT INTO usuario_sucursales (usuario_id, sucursal_id, es_principal)
+         VALUES (?, ?, ?)`,
+        [id, sucursal.sucursal_id, sucursal.es_principal || false],
+      )
+    }
+
+    await connection.commit()
+
+    // Obtener el usuario actualizado con sus sucursales
+    const [updatedUser] = await connection.execute(
+      `SELECT 
+        u.id, u.nombre, u.email, u.rol, u.activo, u.creado_en, u.actualizado_en,
+        GROUP_CONCAT(
+          DISTINCT CONCAT(us.sucursal_id, ':', s.nombre, ':', IF(us.es_principal, '1', '0'))
+          ORDER BY us.es_principal DESC, s.nombre
+          SEPARATOR '|'
+        ) as sucursales_info
+      FROM usuarios u
+      LEFT JOIN usuario_sucursales us ON u.id = us.usuario_id
+      LEFT JOIN sucursales s ON us.sucursal_id = s.id
+      WHERE u.id = ?
+      GROUP BY u.id`,
       [id],
     )
+
+    // Procesar sucursales
+    const user = updatedUser[0]
+    const sucursalesArray = []
+    if (user.sucursales_info) {
+      const sucursalesInfoArray = user.sucursales_info.split("|")
+      sucursalesInfoArray.forEach((info) => {
+        const [sucId, nombre, esPrincipal] = info.split(":")
+        sucursalesArray.push({
+          id: Number.parseInt(sucId),
+          nombre: nombre,
+          es_principal: esPrincipal === "1",
+        })
+      })
+    }
 
     return res.json({
       success: true,
       message: "Usuario actualizado exitosamente",
-      data: updatedUser[0],
+      data: {
+        ...user,
+        sucursales: sucursalesArray,
+        sucursales_info: undefined,
+      },
     })
   } catch (error) {
+    await connection.rollback()
     console.error("Error al actualizar usuario:", error)
     return res.status(500).json({
       success: false,
       message: "Error interno del servidor",
     })
+  } finally {
+    connection.release()
   }
 }
 

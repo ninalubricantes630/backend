@@ -22,7 +22,7 @@ const consoleFormat = winston.format.combine(
 const logger = winston.createLogger({
   level: process.env.NODE_ENV === "production" ? "info" : "debug",
   format: logFormat,
-  defaultMeta: { service: "milo-lubricantes-api" },
+  defaultMeta: { service: "nina-lubricantes-api" },
   transports: [
     // Console transport with colors for development
     new winston.transports.Console({

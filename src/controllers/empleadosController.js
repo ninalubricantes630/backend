@@ -6,15 +6,15 @@ const empleadosController = {
   // Obtener todos los empleados con paginación y filtros
   async getEmpleados(req, res) {
     try {
-      let page = parseInt(req.query.page, 10) || 1
-      let limit = parseInt(req.query.limit, 10) || 10
+
+      let page = Number.parseInt(req.query.page, 10) || 1
+      let limit = Number.parseInt(req.query.limit, 10) || 10
       const search = req.query.search || ""
       const activo = req.query.activo
 
-      // Normalizar valores
       page = page < 1 ? 1 : page
       limit = limit < 1 ? 10 : limit
-      limit = Math.min(limit, 100) // máximo 100
+      limit = Math.min(limit, 100)
       const offset = (page - 1) * limit
 
       let whereClause = "WHERE 1=1"
@@ -31,7 +31,6 @@ const empleadosController = {
         queryParams.push(activo === "true" ? 1 : 0)
       }
 
-      // Inyectar limit y offset como enteros validados
       const empleadosQuery = `
         SELECT 
           e.id,
@@ -58,8 +57,10 @@ const empleadosController = {
         ${whereClause}
       `
 
+
       const [empleados] = await db.pool.execute(empleadosQuery, queryParams)
       const [countResult] = await db.pool.execute(countQuery, queryParams)
+
 
       const total = countResult[0]?.total || 0
       const totalPages = Math.ceil(total / limit)
@@ -69,15 +70,15 @@ const empleadosController = {
         data: {
           empleados,
           pagination: {
-            currentPage: page,
+            page,
+            limit,
+            total,
             totalPages,
-            totalItems: total,
-            itemsPerPage: limit,
           },
         },
       })
     } catch (error) {
-      console.error("Error al obtener empleados:", error)
+      console.error("[v0] Error al obtener empleados:", error)
       responseHelper.error(res, "Error interno del servidor", 500)
     }
   },

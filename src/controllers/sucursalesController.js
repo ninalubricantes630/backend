@@ -6,15 +6,14 @@ const sucursalesController = {
   // Obtener todas las sucursales con paginación y filtros
   async getSucursales(req, res) {
     try {
-      let page = parseInt(req.query.page, 10) || 1
-      let limit = parseInt(req.query.limit, 10) || 10
+      let page = Number.parseInt(req.query.page, 10) || 1
+      let limit = Number.parseInt(req.query.limit, 10) || 10
       const search = req.query.search || ""
       const activo = req.query.activo
 
-      // Normalizar valores
       page = page < 1 ? 1 : page
       limit = limit < 1 ? 10 : limit
-      limit = Math.min(limit, 100) // máximo 100
+      limit = Math.min(limit, 100)
       const offset = (page - 1) * limit
 
       const queryParams = []
@@ -31,7 +30,6 @@ const sucursalesController = {
         queryParams.push(activo === "true" ? 1 : 0)
       }
 
-      // Inyectar limit y offset directamente (enteros validados)
       const sucursalesQuery = `
         SELECT 
           s.id,
@@ -68,10 +66,10 @@ const sucursalesController = {
         data: {
           sucursales,
           pagination: {
-            currentPage: page,
+            page,
+            limit,
+            total,
             totalPages,
-            totalItems: total,
-            itemsPerPage: limit,
           },
         },
       })
@@ -261,7 +259,7 @@ const sucursalesController = {
         FROM sucursales 
         WHERE activo = 1 
         ORDER BY nombre ASC
-      ` 
+      `
 
       const [sucursales] = await db.pool.execute(query)
 

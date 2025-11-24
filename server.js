@@ -138,11 +138,18 @@ app.use("/api/configuracion", require("./src/routes/configuracionRoutes"))
 app.use("/api/tipos-servicios", require("./src/routes/tiposServiciosRoutes"))
 app.use("/api/empleados", require("./src/routes/empleadosRoutes"))
 app.use("/api/sucursales", require("./src/routes/sucursalesRoutes"))
+app.use("/api/productos", require("./src/routes/productosRoutes"))
+app.use("/api/movimientos-stock", require("./src/routes/movimientosStockRoutes"))
+app.use("/api/categorias", require("./src/routes/categoriasRoutes")) // Agregando ruta de categorías
+app.use("/api/ventas", require("./src/routes/ventasRoutes"))
+app.use("/api/cuentas-corrientes", require("./src/routes/cuentasCorrientesRoutes"))
+app.use("/api/caja", require("./src/routes/cajaRoutes"))
+app.use("/api/tarjetas", require("./src/routes/tarjetasRoutes")) // Added new route
 
 app.get("/api/health", (req, res) => {
   const healthCheck = {
     status: "OK",
-    message: "Milo Lubricantes API funcionando correctamente",
+    message: "Nina Lubricantes API funcionando correctamente",
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
     environment: process.env.NODE_ENV || "development",
@@ -221,7 +228,7 @@ const startServer = async () => {
   await initializeServer()
 
   server = app.listen(PORT, () => {
-    logger.info("Servidor Milo Lubricantes iniciado", {
+    logger.info("Servidor Nina Lubricantes iniciado", {
       port: PORT,
       environment: process.env.NODE_ENV || "development",
       apiUrl: `http://localhost:${PORT}/api`,

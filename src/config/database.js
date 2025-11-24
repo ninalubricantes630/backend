@@ -183,6 +183,8 @@ const closePool = async () => {
   }
 }
 
+const getConnection = () => pool.getConnection()
+
 pool.on("connection", (connection) => {
   if (process.env.NODE_ENV === "development") {
     logger.debug("New database connection established", { threadId: connection.threadId })
@@ -204,6 +206,7 @@ module.exports = {
   executeTransaction,
   getStats,
   closePool,
+  getConnection,
   // Alias para compatibilidad
   executeQuery: query,
 }

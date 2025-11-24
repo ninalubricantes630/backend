@@ -10,7 +10,7 @@ const generateToken = async (user, req) => {
       id: user.id,
       email: user.email,
       role: user.rol,
-    }, 
+    },
     process.env.JWT_SECRET,
     { expiresIn: "24h" },
   )
@@ -21,11 +21,8 @@ const generateToken = async (user, req) => {
 
   // Guardar sesión en base de datos
   try {
-    await db.query( 
-      `
-      INSERT INTO sesiones (usuario_id, token_hash, ip_address, user_agent, expires_at)
-      VALUES (?, ?, ?, ?, ?)
-    `,
+    await db.query(
+      `INSERT INTO sesiones (usuario_id, token_hash, ip_address, user_agent, expires_at) VALUES (?, ?, ?, ?, ?)`,
       [user.id, tokenHash, req.ip || req.connection.remoteAddress, req.get("User-Agent") || "Unknown", expiresAt],
     )
   } catch (error) {
@@ -37,7 +34,7 @@ const generateToken = async (user, req) => {
 
 const login = ResponseHelper.asyncHandler(async (req, res) => {
   const { email, password } = req.body
- 
+
   // Validar campos requeridos
   if (!email || !password) {
     return ResponseHelper.validationError(res, [
@@ -46,19 +43,44 @@ const login = ResponseHelper.asyncHandler(async (req, res) => {
     ])
   }
 
-  // Buscar usuario por email
-  const users = await db.query("SELECT * FROM usuarios WHERE email = ? AND activo = 1", [email])
+  const userExists = await db.query(
+    `
+    SELECT 
+      u.id, 
+      u.nombre, 
+      u.email, 
+      u.password,
+      u.rol, 
+      u.activo, 
+      u.creado_en, 
+      u.ultimo_login,
+      GROUP_CONCAT(
+        DISTINCT CONCAT(us.sucursal_id, ':', s.nombre, ':', IF(us.es_principal, '1', '0'))
+        ORDER BY us.es_principal DESC, s.nombre
+        SEPARATOR '|'
+      ) as sucursales_info
+    FROM usuarios u
+    LEFT JOIN usuario_sucursales us ON u.id = us.usuario_id
+    LEFT JOIN sucursales s ON us.sucursal_id = s.id AND s.activo = 1
+    WHERE u.email = ?
+    GROUP BY u.id
+  `,
+    [email],
+  )
 
-  if (users.length === 0) {
-    return ResponseHelper.unauthorized(res, "Credenciales inválidas", "INVALID_CREDENTIALS")
+  if (userExists.length === 0) {
+    return ResponseHelper.unauthorized(res, "El usuario no existe o no está registrado", "USER_NOT_FOUND")
   }
 
-  const user = users[0]
+  const user = userExists[0]
 
-  // Verificar contraseña
+  if (!user.activo) {
+    return ResponseHelper.unauthorized(res, "La cuenta está desactivada. Contacte al administrador", "USER_INACTIVE")
+  }
+
   const isValidPassword = await bcrypt.compare(password, user.password)
   if (!isValidPassword) {
-    return ResponseHelper.unauthorized(res, "Credenciales inválidas", "INVALID_CREDENTIALS")
+    return ResponseHelper.unauthorized(res, "Contraseña incorrecta. Verifique e intente nuevamente", "INVALID_PASSWORD")
   }
 
   // Generar token con sesión
@@ -67,11 +89,24 @@ const login = ResponseHelper.asyncHandler(async (req, res) => {
   // Actualizar último login
   await db.query("UPDATE usuarios SET ultimo_login = NOW() WHERE id = ?", [user.id])
 
-  // Preparar respuesta del usuario (sin password)
-  const { password: _, rol, ...userWithoutPassword } = user
+  const sucursales = []
+  if (user.sucursales_info) {
+    const sucursalesArray = user.sucursales_info.split("|")
+    sucursalesArray.forEach((info) => {
+      const [id, nombre, esPrincipal] = info.split(":")
+      sucursales.push({
+        id: Number.parseInt(id),
+        nombre: nombre,
+        es_principal: esPrincipal === "1",
+      })
+    })
+  }
+
+  const { password: _, rol, sucursales_info, ...userWithoutPassword } = user
   const userResponse = {
     ...userWithoutPassword,
     role: rol,
+    sucursales,
   }
 
   return ResponseHelper.loginSuccess(res, userResponse, token)
@@ -82,8 +117,24 @@ const getCurrentUser = ResponseHelper.asyncHandler(async (req, res) => {
 
   const users = await db.query(
     `
-    SELECT id, nombre, email, rol as role, activo, creado_en, ultimo_login 
-    FROM usuarios WHERE id = ?
+    SELECT 
+      u.id, 
+      u.nombre, 
+      u.email, 
+      u.rol as role, 
+      u.activo, 
+      u.creado_en, 
+      u.ultimo_login,
+      GROUP_CONCAT(
+        DISTINCT CONCAT(us.sucursal_id, ':', s.nombre, ':', IF(us.es_principal, '1', '0'))
+        ORDER BY us.es_principal DESC, s.nombre
+        SEPARATOR '|'
+      ) as sucursales_info
+    FROM usuarios u
+    LEFT JOIN usuario_sucursales us ON u.id = us.usuario_id
+    LEFT JOIN sucursales s ON us.sucursal_id = s.id AND s.activo = 1
+    WHERE u.id = ?
+    GROUP BY u.id
   `,
     [userId],
   )
@@ -92,7 +143,27 @@ const getCurrentUser = ResponseHelper.asyncHandler(async (req, res) => {
     return ResponseHelper.notFound(res, "Usuario no encontrado", "USER_NOT_FOUND")
   }
 
-  return ResponseHelper.success(res, users[0], "Usuario obtenido exitosamente")
+  const user = users[0]
+  const sucursales = []
+  if (user.sucursales_info) {
+    const sucursalesArray = user.sucursales_info.split("|")
+    sucursalesArray.forEach((info) => {
+      const [id, nombre, esPrincipal] = info.split(":")
+      sucursales.push({
+        id: Number.parseInt(id),
+        nombre: nombre,
+        es_principal: esPrincipal === "1",
+      })
+    })
+  }
+
+  const userResponse = {
+    ...user,
+    sucursales,
+    sucursales_info: undefined,
+  }
+
+  return ResponseHelper.success(res, userResponse, "Usuario obtenido exitosamente")
 })
 
 const register = ResponseHelper.asyncHandler(async (req, res) => {
@@ -122,10 +193,7 @@ const register = ResponseHelper.asyncHandler(async (req, res) => {
 
   // Crear usuario
   const result = await db.query(
-    `
-    INSERT INTO usuarios (nombre, email, password, rol, activo, creado_en) 
-    VALUES (?, ?, ?, ?, 1, NOW())
-  `,
+    `INSERT INTO usuarios (nombre, email, password, rol, activo, creado_en) VALUES (?, ?, ?, ?, 1, NOW())`,
     [nombre, email, hashedPassword, rol],
   )
 
@@ -182,8 +250,24 @@ const getProfile = ResponseHelper.asyncHandler(async (req, res) => {
 
   const users = await db.query(
     `
-    SELECT id, nombre, email, rol as role, activo, creado_en, ultimo_login 
-    FROM usuarios WHERE id = ?
+    SELECT 
+      u.id, 
+      u.nombre, 
+      u.email, 
+      u.rol as role, 
+      u.activo, 
+      u.creado_en, 
+      u.ultimo_login,
+      GROUP_CONCAT(
+        DISTINCT CONCAT(us.sucursal_id, ':', s.nombre, ':', IF(us.es_principal, '1', '0'))
+        ORDER BY us.es_principal DESC, s.nombre
+        SEPARATOR '|'
+      ) as sucursales_info
+    FROM usuarios u
+    LEFT JOIN usuario_sucursales us ON u.id = us.usuario_id
+    LEFT JOIN sucursales s ON us.sucursal_id = s.id AND s.activo = 1
+    WHERE u.id = ?
+    GROUP BY u.id
   `,
     [userId],
   )
@@ -192,7 +276,27 @@ const getProfile = ResponseHelper.asyncHandler(async (req, res) => {
     return ResponseHelper.notFound(res, "Usuario no encontrado", "USER_NOT_FOUND")
   }
 
-  return ResponseHelper.success(res, users[0], "Perfil obtenido exitosamente")
+  const user = users[0]
+  const sucursales = []
+  if (user.sucursales_info) {
+    const sucursalesArray = user.sucursales_info.split("|")
+    sucursalesArray.forEach((info) => {
+      const [id, nombre, esPrincipal] = info.split(":")
+      sucursales.push({
+        id: Number.parseInt(id),
+        nombre: nombre,
+        es_principal: esPrincipal === "1",
+      })
+    })
+  }
+
+  const userResponse = {
+    ...user,
+    sucursales,
+    sucursales_info: undefined,
+  }
+
+  return ResponseHelper.success(res, userResponse, "Perfil obtenido exitosamente")
 })
 
 const logout = ResponseHelper.asyncHandler(async (req, res) => {

@@ -7,8 +7,8 @@ const clientesController = {
     try {
       let { page = 1, limit = 10, search = "", searchBy = "" } = req.query
 
-      page = parseInt(page, 10) || 1
-      limit = parseInt(limit, 10) || 10
+      page = Number.parseInt(page, 10) || 1
+      limit = Number.parseInt(limit, 10) || 10
       page = page < 1 ? 1 : page
       limit = limit < 1 ? 10 : limit
       limit = Math.min(limit, 100)
@@ -18,6 +18,10 @@ const clientesController = {
         SELECT DISTINCT
           c.id, c.nombre, c.apellido, c.dni, c.telefono, c.direccion, 
           c.activo, c.created_at, c.updated_at,
+          cc.id as cuenta_id,
+          cc.saldo as saldo_cuenta,
+          cc.limite_credito,
+          cc.activo as cuenta_activa,
           GROUP_CONCAT(DISTINCT CONCAT(
             v.id, '|', v.patente, '|', v.marca, '|', v.modelo, '|', 
             COALESCE(v.año, ''), '|', COALESCE(v.kilometraje, '')
@@ -29,6 +33,7 @@ const clientesController = {
             COALESCE(s.observaciones, ''), '|', s.created_at
           ) ORDER BY s.created_at DESC SEPARATOR ';;') as servicios_data
         FROM clientes c
+        LEFT JOIN cuentas_corrientes cc ON c.id = cc.cliente_id AND cc.activo = 1
         LEFT JOIN vehiculos v ON c.id = v.cliente_id AND v.activo = true
         LEFT JOIN servicios s ON c.id = s.cliente_id AND s.activo = true
         LEFT JOIN vehiculos v2 ON s.vehiculo_id = v2.id
@@ -75,7 +80,6 @@ const clientesController = {
         countQuery += searchCondition
       }
 
-      // Inyectar LIMIT/OFFSET validados directamente
       query += ` GROUP BY c.id ORDER BY c.nombre ASC, c.apellido ASC LIMIT ${limit} OFFSET ${offset}`
 
       const [clientesRaw] = await db.pool.execute(query, queryParams)
@@ -93,6 +97,9 @@ const clientesController = {
           activo: cliente.activo,
           created_at: cliente.created_at,
           updated_at: cliente.updated_at,
+          tiene_cuenta_corriente: cliente.cuenta_activa === 1,
+          saldo_cuenta: cliente.saldo_cuenta || 0,
+          limite_credito: cliente.limite_credito || 0,
           vehiculos: [],
           servicios: [],
         }
@@ -151,82 +158,227 @@ const clientesController = {
 
   // Obtener cliente por ID
   getClienteById: async (req, res) => {
+    const connection = await db.getConnection()
     try {
       const { id } = req.params
-      const [clientes] = await db.pool.execute("SELECT * FROM clientes WHERE id = ? AND activo = true", [id])
+      const [clientes] = await connection.execute("SELECT * FROM clientes WHERE id = ? AND activo = true", [id])
 
       if (clientes.length === 0) {
         return ResponseHelper.notFound(res, "Cliente no encontrado", "CLIENT_NOT_FOUND")
       }
 
-      return ResponseHelper.success(res, clientes[0])
+      const cliente = clientes[0]
+      const [cuentaCorriente] = await connection.execute(
+        "SELECT * FROM cuentas_corrientes WHERE cliente_id = ? AND activo = 1",
+        [id],
+      )
+
+      if (cuentaCorriente.length > 0) {
+        cliente.tiene_cuenta_corriente = true
+        cliente.limite_credito = cuentaCorriente[0].limite_credito
+        cliente.saldo_actual = cuentaCorriente[0].saldo
+      } else {
+        cliente.tiene_cuenta_corriente = false
+        cliente.limite_credito = 0
+        cliente.saldo_actual = 0
+      }
+
+      return ResponseHelper.success(res, cliente)
     } catch (error) {
       console.error("Error al obtener cliente:", error)
       return ResponseHelper.error(res, "Error al obtener cliente", 500, "DATABASE_ERROR", error)
+    } finally {
+      connection.release()
     }
   },
 
   // Crear nuevo cliente
   createCliente: async (req, res) => {
+    const connection = await db.getConnection()
     try {
-      const { nombre, apellido, dni, telefono, direccion } = req.body
+      await connection.beginTransaction()
+
+      const { nombre, apellido, dni, telefono, direccion, tiene_cuenta_corriente, limite_credito } = req.body
 
       if (dni) {
-        const [existingCliente] = await db.pool.execute("SELECT id FROM clientes WHERE dni = ? AND activo = true", [dni])
+        const [existingCliente] = await connection.execute("SELECT id FROM clientes WHERE dni = ? AND activo = true", [
+          dni,
+        ])
         if (existingCliente.length > 0) {
+          await connection.rollback()
+          connection.release()
           return ResponseHelper.error(res, "Ya existe un cliente con ese DNI", 400, "DUPLICATE_DNI")
         }
       }
 
-      const [result] = await db.pool.execute(
+      const [result] = await connection.execute(
         `INSERT INTO clientes (nombre, apellido, dni, telefono, direccion, activo) 
          VALUES (?, ?, ?, ?, ?, true)`,
         [nombre, apellido, dni || null, telefono || null, direccion || null],
       )
 
-      const [newCliente] = await db.pool.execute("SELECT * FROM clientes WHERE id = ?", [result.insertId])
+      const clienteId = result.insertId
 
-      return ResponseHelper.success(res, newCliente[0], "Cliente creado exitosamente", 201)
+      if (tiene_cuenta_corriente === true || tiene_cuenta_corriente === "true") {
+        const creditLimit = limite_credito ? Number.parseFloat(limite_credito) : 0
+
+        // Check if cuenta corriente already exists
+        const [existingCuenta] = await connection.execute("SELECT id FROM cuentas_corrientes WHERE cliente_id = ?", [
+          clienteId,
+        ])
+
+        if (existingCuenta.length > 0) {
+          // Update existing cuenta corriente
+          await connection.execute(
+            `UPDATE cuentas_corrientes 
+             SET limite_credito = ?, activo = 1, updated_at = NOW() 
+             WHERE cliente_id = ?`,
+            [creditLimit, clienteId],
+          )
+        } else {
+          // Create new cuenta corriente
+          await connection.execute(
+            `INSERT INTO cuentas_corrientes (cliente_id, saldo, limite_credito, activo) 
+             VALUES (?, 0, ?, 1)`,
+            [clienteId, creditLimit],
+          )
+        }
+      }
+
+      await connection.commit()
+
+      const [newCliente] = await connection.execute("SELECT * FROM clientes WHERE id = ?", [clienteId])
+
+      const cliente = newCliente[0]
+      if (tiene_cuenta_corriente === true || tiene_cuenta_corriente === "true") {
+        const [cuentaCorriente] = await connection.execute(
+          "SELECT * FROM cuentas_corrientes WHERE cliente_id = ? AND activo = 1",
+          [clienteId],
+        )
+        if (cuentaCorriente.length > 0) {
+          cliente.tiene_cuenta_corriente = true
+          cliente.limite_credito = cuentaCorriente[0].limite_credito
+          cliente.saldo_actual = cuentaCorriente[0].saldo
+        }
+      } else {
+        cliente.tiene_cuenta_corriente = false
+        cliente.limite_credito = 0
+        cliente.saldo_actual = 0
+      }
+
+      return ResponseHelper.success(res, cliente, "Cliente creado exitosamente", 201)
     } catch (error) {
-      console.error("Error al crear cliente:", error)
+      await connection.rollback()
+      console.error("[v0] Error al crear cliente:", error)
       return ResponseHelper.error(res, "Error al crear cliente", 500, "DATABASE_ERROR", error)
+    } finally {
+      connection.release()
     }
   },
 
   // Actualizar cliente
   updateCliente: async (req, res) => {
+    const connection = await db.getConnection()
     try {
-      const { id } = req.params
-      const { nombre, apellido, dni, telefono, direccion } = req.body
+      await connection.beginTransaction()
 
-      const [existingCliente] = await db.pool.execute("SELECT id FROM clientes WHERE id = ? AND activo = true", [id])
+      const { id } = req.params
+      const { nombre, apellido, dni, telefono, direccion, tiene_cuenta_corriente, limite_credito } = req.body
+
+      const [existingCliente] = await connection.execute("SELECT id FROM clientes WHERE id = ? AND activo = true", [id])
       if (existingCliente.length === 0) {
+        await connection.rollback()
+        connection.release()
         return ResponseHelper.notFound(res, "Cliente no encontrado", "CLIENT_NOT_FOUND")
       }
 
       if (dni) {
-        const [duplicateCliente] = await db.pool.execute(
+        const [duplicateCliente] = await connection.execute(
           "SELECT id FROM clientes WHERE dni = ? AND id != ? AND activo = true",
           [dni, id],
         )
         if (duplicateCliente.length > 0) {
+          await connection.rollback()
+          connection.release()
           return ResponseHelper.error(res, "Ya existe otro cliente con ese DNI", 400, "DUPLICATE_DNI")
         }
       }
 
-      await db.pool.execute(
+      await connection.execute(
         `UPDATE clientes 
-         SET nombre = ?, apellido = ?, dni = ?, telefono = ?, direccion = ?
+         SET nombre = ?, apellido = ?, dni = ?, telefono = ?, direccion = ?, updated_at = NOW()
          WHERE id = ?`,
         [nombre, apellido, dni || null, telefono || null, direccion || null, id],
       )
 
-      const [updatedCliente] = await db.pool.execute("SELECT * FROM clientes WHERE id = ?", [id])
+      const [cuentaExistente] = await connection.execute("SELECT * FROM cuentas_corrientes WHERE cliente_id = ?", [id])
 
-      return ResponseHelper.success(res, updatedCliente[0], "Cliente actualizado exitosamente")
+      const shouldHaveCuenta = tiene_cuenta_corriente === true || tiene_cuenta_corriente === "true"
+
+      if (shouldHaveCuenta) {
+        const creditLimit = limite_credito ? Number.parseFloat(limite_credito) : 0
+
+        if (cuentaExistente.length === 0) {
+          // Crear nueva cuenta corriente
+          await connection.execute(
+            `INSERT INTO cuentas_corrientes (cliente_id, saldo, limite_credito, activo) 
+             VALUES (?, 0, ?, 1)`,
+            [id, creditLimit],
+          )
+        } else {
+          // Actualizar cuenta existente
+          await connection.execute(
+            `UPDATE cuentas_corrientes 
+             SET limite_credito = ?, activo = 1, updated_at = NOW() 
+             WHERE cliente_id = ?`,
+            [creditLimit, id],
+          )
+        }
+      } else if (cuentaExistente.length > 0) {
+        // Verificar que no tenga saldo pendiente antes de desactivar
+        if (Number.parseFloat(cuentaExistente[0].saldo) > 0) {
+          await connection.rollback()
+          connection.release()
+          return ResponseHelper.error(
+            res,
+            "No se puede desactivar la cuenta corriente porque tiene saldo pendiente",
+            400,
+            "CUENTA_CON_SALDO",
+          )
+        }
+        // Desactivar cuenta corriente
+        await connection.execute("UPDATE cuentas_corrientes SET activo = 0, updated_at = NOW() WHERE cliente_id = ?", [
+          id,
+        ])
+      }
+
+      await connection.commit()
+
+      const [updatedCliente] = await connection.execute("SELECT * FROM clientes WHERE id = ?", [id])
+
+      const cliente = updatedCliente[0]
+      const [cuentaCorriente] = await connection.execute(
+        "SELECT * FROM cuentas_corrientes WHERE cliente_id = ? AND activo = 1",
+        [id],
+      )
+
+      if (cuentaCorriente.length > 0) {
+        cliente.tiene_cuenta_corriente = true
+        cliente.limite_credito = cuentaCorriente[0].limite_credito
+        cliente.saldo_actual = cuentaCorriente[0].saldo
+      } else {
+        cliente.tiene_cuenta_corriente = false
+        cliente.limite_credito = 0
+        cliente.saldo_actual = 0
+      }
+
+      return ResponseHelper.success(res, cliente, "Cliente actualizado exitosamente")
     } catch (error) {
-      console.error("Error al actualizar cliente:", error)
+      await connection.rollback()
+      console.error("[v0] Error al actualizar cliente:", error)
       return ResponseHelper.error(res, "Error al actualizar cliente", 500, "DATABASE_ERROR", error)
+    } finally {
+      connection.release()
     }
   },
 
@@ -235,9 +387,30 @@ const clientesController = {
     try {
       const { id } = req.params
 
-      const [existingCliente] = await db.pool.execute("SELECT id FROM clientes WHERE id = ? AND activo = true", [id])
+      if (id === "1") {
+        return ResponseHelper.error(
+          res,
+          "No se puede eliminar el cliente Consumidor Final",
+          400,
+          "CONSUMIDOR_FINAL_PROTECTED",
+        )
+      }
+
+      const [existingCliente] = await db.pool.execute(
+        "SELECT id, nombre FROM clientes WHERE id = ? AND activo = true",
+        [id],
+      )
       if (existingCliente.length === 0) {
         return ResponseHelper.notFound(res, "Cliente no encontrado", "CLIENT_NOT_FOUND")
+      }
+
+      if (existingCliente[0].nombre?.toLowerCase().includes("consumidor final")) {
+        return ResponseHelper.error(
+          res,
+          "No se puede eliminar el cliente Consumidor Final",
+          400,
+          "CONSUMIDOR_FINAL_PROTECTED",
+        )
       }
 
       const [vehiculos] = await db.pool.execute("SELECT id FROM vehiculos WHERE cliente_id = ? AND activo = true", [id])

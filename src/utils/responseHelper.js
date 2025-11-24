@@ -191,6 +191,16 @@ class ResponseHelper {
   static logoutSuccess(res, message = "Logout exitoso") {
     return this.success(res, null, message, 200)
   }
-} 
+
+  static sendSuccess(res, data = null, message = "Operación exitosa", statusCode = 200) {
+    return this.success(res, data, message, statusCode)
+  }
+
+  static sendError(res, message = "Error interno del servidor", statusCode = 500, errorCode = null) {
+    return this.error(res, message, statusCode, errorCode)
+  }
+}
 
 module.exports = ResponseHelper
+module.exports.sendSuccess = ResponseHelper.sendSuccess.bind(ResponseHelper)
+module.exports.sendError = ResponseHelper.sendError.bind(ResponseHelper)

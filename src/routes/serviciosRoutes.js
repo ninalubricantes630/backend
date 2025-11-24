@@ -19,7 +19,7 @@ router.get("/:id", serviciosController.getServicioById)
 // Rutas de modificación
 router.post("/", validateServicio, serviciosController.createServicio)
 router.put("/:id", validateServicio, serviciosController.updateServicio)
+router.patch("/:id/cancelar", serviciosController.cancelarServicio)
 router.delete("/:id", serviciosController.deleteServicio)
 
 module.exports = router
- 

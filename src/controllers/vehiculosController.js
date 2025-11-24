@@ -1,4 +1,5 @@
 const db = require("../config/database")
+const ResponseHelper = require("../utils/responseHelper")
 
 const vehiculosController = {
   // Obtener todos los vehículos con paginación y filtros
@@ -6,8 +7,8 @@ const vehiculosController = {
     try {
       let { page = 1, limit = 10, search = "", searchCriteria = "patente", clienteId = "" } = req.query
 
-      page = parseInt(page, 10) || 1
-      limit = parseInt(limit, 10) || 10
+      page = Number.parseInt(page, 10) || 1
+      limit = Number.parseInt(limit, 10) || 10
       page = page < 1 ? 1 : page
       limit = limit < 1 ? 10 : limit
       limit = Math.min(limit, 100)
@@ -23,9 +24,12 @@ const vehiculosController = {
                    s.id, '|',
                    s.numero, '|',
                    COALESCE(s.descripcion, ''), '|',
-                   COALESCE(s.precio_referencia, 0), '|',
+                   COALESCE(s.total, 0), '|',
                    COALESCE(s.created_at, ''), '|',
-                   COALESCE(s.estado, '')
+                   COALESCE(s.estado, ''), '|',
+                   COALESCE(s.interes_sistema_monto, 0), '|',
+                   COALESCE(s.interes_tarjeta_monto, 0), '|',
+                   COALESCE(s.total_con_interes_tarjeta, 0)
                  ) ORDER BY s.created_at DESC SEPARATOR ';;'
                ) as servicios_data
         FROM vehiculos v
@@ -96,12 +100,34 @@ const vehiculosController = {
           const serviciosArray = vehiculo.servicios_data.split(";;")
           for (const servicioStr of serviciosArray) {
             if (servicioStr.trim()) {
-              const [id, numero, descripcion, precio_referencia, created_at, estado] = servicioStr.split("|")
+              const [
+                id,
+                numero,
+                descripcion,
+                total,
+                created_at,
+                estado,
+                interes_sistema_monto,
+                interes_tarjeta_monto,
+                total_con_interes_tarjeta,
+              ] = servicioStr.split("|")
+
+              const totalBase = Number.parseFloat(total) || 0
+              const interesSistema = Number.parseFloat(interes_sistema_monto) || 0
+              const interesTarjeta = Number.parseFloat(interes_tarjeta_monto) || 0
+              const totalConInteresTarjeta = Number.parseFloat(total_con_interes_tarjeta) || 0
+
+              // Calcular totales según la misma lógica que en reportes
+              const total_con_interes = interesSistema > 0 ? totalBase : null
+              const total_con_interes_tarjeta_final = totalConInteresTarjeta > 0 ? totalConInteresTarjeta : null
+
               servicios.push({
                 id: Number.parseInt(id) || 0,
                 numero: numero || "",
                 descripcion: descripcion || "",
-                total: Number.parseFloat(precio_referencia) || 0,
+                total: totalBase,
+                total_con_interes: total_con_interes,
+                total_con_interes_tarjeta: total_con_interes_tarjeta_final,
                 fecha_creacion: created_at || "",
                 estado: estado || "",
               })
@@ -116,17 +142,21 @@ const vehiculosController = {
         }
       })
 
-      const response = {
-        data: processedVehiculos,
+      const totalPages = Math.ceil(total / limit)
+      const pagination = {
+        page,
+        limit,
         total,
-        totalPages: Math.ceil(total / limit),
-        currentPage: page,
+        totalPages,
       }
 
-      res.json(response)
+      return ResponseHelper.success(res, {
+        vehiculos: processedVehiculos,
+        pagination,
+      })
     } catch (error) {
       console.error("Error al obtener vehículos:", error)
-      res.status(500).json({ error: "Error interno del servidor" })
+      return ResponseHelper.error(res, "Error al obtener vehículos", 500)
     }
   },
 
@@ -143,13 +173,13 @@ const vehiculosController = {
       )
 
       if (vehiculos.length === 0) {
-        return res.status(404).json({ error: "Vehículo no encontrado" })
+        return ResponseHelper.error(res, "Vehículo no encontrado", 404)
       }
 
-      res.json(vehiculos[0])
+      return ResponseHelper.success(res, vehiculos[0])
     } catch (error) {
       console.error("Error al obtener vehículo:", error)
-      res.status(500).json({ error: "Error interno del servidor" })
+      return ResponseHelper.error(res, "Error interno del servidor", 500)
     }
   },
 
@@ -160,14 +190,14 @@ const vehiculosController = {
 
       const [cliente] = await db.pool.execute("SELECT id FROM clientes WHERE id = ? AND activo = true", [clienteId])
       if (cliente.length === 0) {
-        return res.status(400).json({ error: "Cliente no encontrado" })
+        return ResponseHelper.error(res, "Cliente no encontrado", 400)
       }
 
       const [existingVehiculo] = await db.pool.execute("SELECT id FROM vehiculos WHERE patente = ? AND activo = true", [
         patente,
       ])
       if (existingVehiculo.length > 0) {
-        return res.status(400).json({ error: "Ya existe un vehículo con esa patente" })
+        return ResponseHelper.error(res, "Ya existe un vehículo con esa patente", 400)
       }
 
       const [result] = await db.pool.execute(
@@ -185,10 +215,10 @@ const vehiculosController = {
         [result.insertId],
       )
 
-      res.status(201).json(newVehiculo[0])
+      return ResponseHelper.success(res, newVehiculo[0], 201)
     } catch (error) {
       console.error("Error al crear vehículo:", error)
-      res.status(500).json({ error: "Error interno del servidor" })
+      return ResponseHelper.error(res, "Error interno del servidor", 500)
     }
   },
 
@@ -200,12 +230,12 @@ const vehiculosController = {
 
       const [existingVehiculo] = await db.pool.execute("SELECT id FROM vehiculos WHERE id = ? AND activo = true", [id])
       if (existingVehiculo.length === 0) {
-        return res.status(404).json({ error: "Vehículo no encontrado" })
+        return ResponseHelper.error(res, "Vehículo no encontrado", 404)
       }
 
       const [cliente] = await db.pool.execute("SELECT id FROM clientes WHERE id = ? AND activo = true", [clienteId])
       if (cliente.length === 0) {
-        return res.status(400).json({ error: "Cliente no encontrado" })
+        return ResponseHelper.error(res, "Cliente no encontrado", 400)
       }
 
       const [duplicateVehiculo] = await db.pool.execute(
@@ -213,7 +243,7 @@ const vehiculosController = {
         [patente, id],
       )
       if (duplicateVehiculo.length > 0) {
-        return res.status(400).json({ error: "Ya existe otro vehículo con esa patente" })
+        return ResponseHelper.error(res, "Ya existe otro vehículo con esa patente", 400)
       }
 
       await db.pool.execute(
@@ -232,10 +262,10 @@ const vehiculosController = {
         [id],
       )
 
-      res.json(updatedVehiculo[0])
+      return ResponseHelper.success(res, updatedVehiculo[0])
     } catch (error) {
       console.error("Error al actualizar vehículo:", error)
-      res.status(500).json({ error: "Error interno del servidor" })
+      return ResponseHelper.error(res, "Error interno del servidor", 500)
     }
   },
 
@@ -246,7 +276,7 @@ const vehiculosController = {
 
       const [existingVehiculo] = await db.pool.execute("SELECT id FROM vehiculos WHERE id = ? AND activo = true", [id])
       if (existingVehiculo.length === 0) {
-        return res.status(404).json({ error: "Vehículo no encontrado" })
+        return ResponseHelper.error(res, "Vehículo no encontrado", 404)
       }
 
       const [servicios] = await db.pool.execute(
@@ -254,17 +284,15 @@ const vehiculosController = {
         [id],
       )
       if (servicios.length > 0) {
-        return res.status(400).json({
-          error: "No se puede eliminar el vehículo porque tiene servicios pendientes",
-        })
+        return ResponseHelper.error(res, "No se puede eliminar el vehículo porque tiene servicios pendientes", 400)
       }
 
       await db.pool.execute("UPDATE vehiculos SET activo = false WHERE id = ?", [id])
 
-      res.json({ message: "Vehículo eliminado correctamente" })
+      return ResponseHelper.success(res, { message: "Vehículo eliminado correctamente" })
     } catch (error) {
       console.error("Error al eliminar vehículo:", error)
-      res.status(500).json({ error: "Error interno del servidor" })
+      return ResponseHelper.error(res, "Error interno del servidor", 500)
     }
   },
 
@@ -274,7 +302,7 @@ const vehiculosController = {
       const { clienteId } = req.params
       const clienteIdNum = Number.parseInt(clienteId, 10)
       if (isNaN(clienteIdNum) || clienteIdNum <= 0) {
-        return res.status(400).json({ error: "ID de cliente inválido" })
+        return ResponseHelper.error(res, "ID de cliente inválido", 400)
       }
 
       const [vehiculos] = await db.pool.execute(
@@ -286,10 +314,10 @@ const vehiculosController = {
         [clienteIdNum],
       )
 
-      res.json({ data: vehiculos })
+      return ResponseHelper.success(res, { data: vehiculos })
     } catch (error) {
       console.error("Error al obtener vehículos del cliente:", error)
-      res.status(500).json({ error: "Error interno del servidor" })
+      return ResponseHelper.error(res, "Error interno del servidor", 500)
     }
   },
 
@@ -304,12 +332,12 @@ const vehiculosController = {
         [id],
       )
       if (existingVehiculo.length === 0) {
-        return res.status(404).json({ error: "Vehículo no encontrado" })
+        return ResponseHelper.error(res, "Vehículo no encontrado", 404)
       }
 
       const kilometrajeAnterior = existingVehiculo[0].kilometraje
       if (kilometraje < kilometrajeAnterior) {
-        return res.status(400).json({ error: "El nuevo kilometraje no puede ser menor al actual" })
+        return ResponseHelper.error(res, "El nuevo kilometraje no puede ser menor al actual", 400)
       }
 
       await db.pool.execute("UPDATE vehiculos SET kilometraje = ? WHERE id = ?", [kilometraje, id])
@@ -322,10 +350,10 @@ const vehiculosController = {
         [id],
       )
 
-      res.json(updatedVehiculo[0])
+      return ResponseHelper.success(res, updatedVehiculo[0])
     } catch (error) {
       console.error("Error al actualizar kilometraje:", error)
-      res.status(500).json({ error: "Error interno del servidor" })
+      return ResponseHelper.error(res, "Error interno del servidor", 500)
     }
   },
 }

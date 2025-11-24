@@ -4,11 +4,18 @@ const ResponseHelper = require("../utils/responseHelper")
 const handleValidationErrors = (req, res, next) => {
   const errors = validationResult(req)
   if (!errors.isEmpty()) {
+    console.log("[v0] Validation errors found:")
+    console.log("[v0] Request body:", JSON.stringify(req.body, null, 2))
+    console.log("[v0] Errors:", JSON.stringify(errors.array(), null, 2))
+
     const formattedErrors = errors.array().map((error) => ({
       field: error.path || error.param,
       message: error.msg,
       value: error.value,
     }))
+
+    console.log("[v0] Formatted errors:", JSON.stringify(formattedErrors, null, 2))
+
     return ResponseHelper.validationError(res, formattedErrors)
   }
   next()
@@ -26,12 +33,6 @@ const validateLogin = [
 ]
 
 const validateRegister = [
-  body("nombre")
-    .trim()
-    .isLength({ min: 2, max: 100 })
-    .withMessage("El nombre debe tener entre 2 y 100 caracteres")
-    .matches(/^[a-zA-ZáéíóúÁÉÍÓÚñÑ\s]+$/)
-    .withMessage("El nombre solo puede contener letras y espacios"),
   body("email")
     .isEmail()
     .withMessage("Email inválido")
@@ -55,15 +56,38 @@ const validateCliente = [
   body("nombre")
     .trim()
     .isLength({ min: 2, max: 100 })
-    .withMessage("El nombre debe tener entre 2 y 100 caracteres")
-    .matches(/^[a-zA-ZáéíóúÁÉÍÓÚñÑ\s]+$/)
-    .withMessage("El nombre solo puede contener letras y espacios"),
+    .withMessage("El nombre debe tener entre 2 y 100 caracteres"),
   body("apellido")
     .trim()
     .isLength({ min: 2, max: 100 })
     .withMessage("El apellido debe tener entre 2 y 100 caracteres")
     .matches(/^[a-zA-ZáéíóúÁÉÍÓÚñÑ\s]+$/)
     .withMessage("El apellido solo puede contener letras y espacios"),
+  body("dni")
+    .optional({ checkFalsy: true })
+    .trim()
+    .isLength({ min: 7, max: 8 })
+    .withMessage("El DNI debe tener entre 7 y 8 dígitos")
+    .matches(/^[0-9]+$/)
+    .withMessage("El DNI solo puede contener números"),
+  body("telefono")
+    .optional({ checkFalsy: true })
+    .trim()
+    .isLength({ max: 20 })
+    .withMessage("El teléfono no puede tener más de 20 caracteres"),
+  body("direccion")
+    .optional({ checkFalsy: true })
+    .trim()
+    .isLength({ max: 255 })
+    .withMessage("La dirección no puede tener más de 255 caracteres"),
+  body("tiene_cuenta_corriente")
+    .optional()
+    .isBoolean()
+    .withMessage("El campo tiene_cuenta_corriente debe ser verdadero o falso"),
+  body("limite_credito")
+    .optional()
+    .isFloat({ min: 0, max: 999999.99 })
+    .withMessage("El límite de crédito debe ser un número positivo menor a $999,999.99"),
   handleValidationErrors,
 ]
 
@@ -100,9 +124,7 @@ const validateUser = [
   body("nombre")
     .trim()
     .isLength({ min: 2, max: 100 })
-    .withMessage("El nombre debe tener entre 2 y 100 caracteres")
-    .matches(/^[a-zA-ZáéíóúÁÉÍÓÚñÑ\s]+$/)
-    .withMessage("El nombre solo puede contener letras y espacios"),
+    .withMessage("El nombre debe tener entre 2 y 100 caracteres"),
   body("email")
     .isEmail()
     .withMessage("Email inválido")
@@ -115,6 +137,38 @@ const validateUser = [
     .withMessage("La contraseña debe tener entre 6 y 50 caracteres"),
   body("rol").isIn(["ADMIN", "EMPLEADO"]).withMessage("El rol debe ser ADMIN o EMPLEADO"),
   handleValidationErrors,
+]
+
+const validateId = [
+  param("id").isInt({ min: 1 }).withMessage("ID debe ser un número entero positivo"),
+  handleValidationErrors,
+]
+
+const validateProductoId = [
+  param("productoId").isInt({ min: 1 }).withMessage("ID de producto debe ser un número entero positivo"),
+  handleValidationErrors,
+]
+
+const validateClienteId = [
+  param("clienteId")
+    .isInt({ min: 1 })
+    .withMessage("ID de cliente debe ser un número entero positivo")
+    .toInt(), // Convertir a entero automáticamente
+  (req, res, next) => {
+    const errors = validationResult(req)
+    if (!errors.isEmpty()) {
+      const formattedErrors = errors.array().map((error) => ({
+        field: error.path || error.param,
+        message: error.msg,
+        value: error.value,
+      }))
+      return res.status(400).json({
+        error: "Datos de entrada inválidos",
+        details: formattedErrors,
+      })
+    }
+    next()
+  },
 ]
 
 const validateServicio = [
@@ -200,33 +254,6 @@ const validateConfiguracionUpdate = [
   handleValidationErrors,
 ]
 
-const validateId = [
-  param("id").isInt({ min: 1 }).withMessage("ID debe ser un número entero positivo"),
-  handleValidationErrors,
-]
-
-const validateClienteId = [
-  param("clienteId")
-    .isInt({ min: 1 })
-    .withMessage("ID de cliente debe ser un número entero positivo")
-    .toInt(), // Convertir a entero automáticamente
-  (req, res, next) => {
-    const errors = validationResult(req)
-    if (!errors.isEmpty()) {
-      const formattedErrors = errors.array().map((error) => ({
-        field: error.path || error.param,
-        message: error.msg,
-        value: error.value,
-      }))
-      return res.status(400).json({
-        error: "Datos de entrada inválidos",
-        details: formattedErrors,
-      })
-    }
-    next()
-  },
-]
-
 const validatePagination = [
   query("page").optional().isInt({ min: 1, max: 10000 }).withMessage("Página debe ser un número entre 1 y 10,000"),
   query("limit").optional().isInt({ min: 1, max: 100 }).withMessage("Límite debe ser un número entre 1 y 100"),
@@ -297,9 +324,7 @@ const validateEmpleado = [
   body("nombre")
     .trim()
     .isLength({ min: 2, max: 100 })
-    .withMessage("El nombre debe tener entre 2 y 100 caracteres")
-    .matches(/^[a-zA-ZáéíóúÁÉÍÓÚñÑ\s]+$/)
-    .withMessage("El nombre solo puede contener letras y espacios"),
+    .withMessage("El nombre debe tener entre 2 y 100 caracteres"),
   body("apellido")
     .trim()
     .isLength({ min: 2, max: 100 })
@@ -315,19 +340,13 @@ const validateEmpleadoUpdate = [
   body("nombre")
     .trim()
     .isLength({ min: 2, max: 100 })
-    .withMessage("El nombre debe tener entre 2 y 100 caracteres")
-    .matches(/^[a-zA-ZáéíóúÁÉÍÓÚñÑ\s]+$/)
-    .withMessage("El nombre solo puede contener letras y espacios"),
+    .withMessage("El nombre debe tener entre 2 y 100 caracteres"),
   body("apellido")
     .trim()
     .isLength({ min: 2, max: 100 })
     .withMessage("El apellido debe tener entre 2 y 100 caracteres")
     .matches(/^[a-zA-ZáéíóúÁÉÍÓÚñÑ\s]+$/)
     .withMessage("El apellido solo puede contener letras y espacios"),
-  body("telefono")
-    .optional()
-    .matches(/^(\+54\s?)?(\d{2,4}\s?)?\d{6,8}$/)
-    .withMessage("Formato de teléfono argentino inválido (ej: +54 11 1234-5678)"),
   body("cargo").optional().isLength({ max: 100 }).withMessage("El cargo no puede tener más de 100 caracteres"),
   body("sucursal_id").isInt({ min: 1 }).withMessage("ID de sucursal inválido"),
   body("activo").isBoolean().withMessage("El estado activo debe ser verdadero o falso"),
@@ -357,6 +376,230 @@ const validateSucursalUpdate = [
   handleValidationErrors,
 ]
 
+const validateCategoria = [
+  body("nombre")
+    .trim()
+    .isLength({ min: 2, max: 100 })
+    .withMessage("El nombre debe tener entre 2 y 100 caracteres")
+    .matches(/^[a-zA-ZáéíóúÁÉÍÓÚñÑ0-9\s\-.]+$/)
+    .withMessage("El nombre contiene caracteres inválidos"),
+  body("descripcion")
+    .optional()
+    .isLength({ max: 500 })
+    .withMessage("La descripción no puede tener más de 500 caracteres"),
+  handleValidationErrors,
+]
+
+const validateProducto = [
+  body("codigo").optional().trim().isLength({ max: 50 }).withMessage("El código no puede tener más de 50 caracteres"),
+  body("nombre").trim().isLength({ min: 2, max: 200 }).withMessage("El nombre debe tener entre 2 y 200 caracteres"),
+  body("descripcion")
+    .optional()
+    .isLength({ max: 1000 })
+    .withMessage("La descripción no puede tener más de 1000 caracteres"),
+  body("categoria_id").isInt({ min: 1 }).withMessage("ID de categoría inválido"),
+  body("precio")
+    .isFloat({ min: 0, max: 999999.99 })
+    .withMessage("El precio debe ser un número positivo menor a $999,999.99"),
+  body("sucursal_id").isInt({ min: 1 }).withMessage("ID de sucursal inválido"),
+  body("unidad_medida")
+    .optional()
+    .isIn(["unidad", "litro"])
+    .withMessage("La unidad de medida debe ser 'unidad' o 'litro'"),
+  body("stock")
+    .optional()
+    .custom((value, { req }) => {
+      const stockNum = Number.parseFloat(value)
+      if (isNaN(stockNum) || stockNum < 0) {
+        throw new Error("El stock debe ser un número positivo")
+      }
+      if (req.body.unidad_medida === "unidad" && !Number.isInteger(stockNum)) {
+        throw new Error("El stock para productos de unidad debe ser un número entero")
+      }
+      return true
+    }),
+  handleValidationErrors,
+]
+
+const validateMovimientoStock = [
+  body("producto_id").isInt({ min: 1 }).withMessage("ID de producto inválido"),
+  body("tipo")
+    .isIn(["ENTRADA", "SALIDA", "AJUSTE"])
+    .withMessage("Tipo de movimiento inválido (ENTRADA, SALIDA, AJUSTE)"),
+  body("cantidad")
+    .custom((value) => {
+      const cantidadNum = Number.parseFloat(value)
+      if (isNaN(cantidadNum) || cantidadNum <= 0) {
+        throw new Error("La cantidad debe ser un número mayor a 0")
+      }
+      return true
+    })
+    .withMessage("La cantidad debe ser un número válido mayor a 0"),
+  body("motivo").optional().trim().isLength({ max: 500 }).withMessage("El motivo no puede tener más de 500 caracteres"),
+  handleValidationErrors,
+]
+
+const validateVenta = [
+  body("cliente_id")
+    .optional({ nullable: true, checkFalsy: true })
+    .custom((value) => {
+      if (value === null || value === undefined || value === 0 || value === "") {
+        return true
+      }
+      const clienteId = Number.parseInt(value)
+      if (!Number.isInteger(clienteId) || clienteId < 1) {
+        throw new Error("ID de cliente inválido")
+      }
+      return true
+    }),
+  body("sucursal_id")
+    .optional({ nullable: true })
+    .custom((value) => {
+      if (value !== null && value !== undefined) {
+        const sucursalId = Number.parseInt(value)
+        if (!Number.isInteger(sucursalId) || sucursalId < 1) {
+          throw new Error("ID de sucursal inválido")
+        }
+      }
+      return true
+    }),
+  body("tipo_pago")
+    .notEmpty()
+    .withMessage("El tipo de pago es requerido")
+    .customSanitizer((value) => {
+      return typeof value === "string" ? value.toUpperCase() : value
+    })
+    .isIn(["EFECTIVO", "TARJETA_CREDITO", "TRANSFERENCIA", "CUENTA_CORRIENTE"])
+    .withMessage("Tipo de pago inválido (EFECTIVO, TARJETA_CREDITO, TRANSFERENCIA, CUENTA_CORRIENTE)"),
+  body("items").isArray({ min: 1 }).withMessage("Debe incluir al menos un producto"),
+  body("items.*.producto_id").isInt({ min: 1 }).withMessage("ID de producto inválido"),
+  body("items.*.cantidad").custom((value) => {
+    const cantidad = Number.parseFloat(value)
+    if (isNaN(cantidad) || cantidad <= 0) {
+      throw new Error("La cantidad debe ser mayor a 0")
+    }
+    return true
+  }),
+  body("items.*.precio_unitario").custom((value) => {
+    const precio = Number.parseFloat(value)
+    if (isNaN(precio) || precio < 0) {
+      throw new Error("El precio unitario debe ser un número positivo")
+    }
+    return true
+  }),
+  body("descuento")
+    .optional({ nullable: true })
+    .custom((value) => {
+      if (value !== null && value !== undefined) {
+        const descuento = Number.parseFloat(value)
+        if (isNaN(descuento) || descuento < 0) {
+          throw new Error("El descuento debe ser un número positivo")
+        }
+      }
+      return true
+    }),
+  body("interes_sistema")
+    .optional({ nullable: true })
+    .custom((value) => {
+      if (value !== null && value !== undefined) {
+        const interes = Number.parseFloat(value)
+        if (isNaN(interes) || interes < 0) {
+          throw new Error("El interés del sistema debe ser un número positivo")
+        }
+      }
+      return true
+    }),
+  body("total_con_interes")
+    .optional({ nullable: true })
+    .custom((value) => {
+      if (value !== null && value !== undefined) {
+        const total = Number.parseFloat(value)
+        if (isNaN(total) || total < 0) {
+          throw new Error("El total con interés debe ser un número positivo")
+        }
+      }
+      return true
+    }),
+  body("tarjeta_id")
+    .optional({ nullable: true })
+    .custom((value) => {
+      if (value !== null && value !== undefined) {
+        const tarjetaId = Number.parseInt(value)
+        if (!Number.isInteger(tarjetaId) || tarjetaId < 1) {
+          throw new Error("ID de tarjeta inválido")
+        }
+      }
+      return true
+    }),
+  body("numero_cuotas")
+    .optional({ nullable: true })
+    .custom((value) => {
+      if (value !== null && value !== undefined) {
+        const cuotas = Number.parseInt(value)
+        if (!Number.isInteger(cuotas) || cuotas < 1) {
+          throw new Error("Número de cuotas inválido")
+        }
+      }
+      return true
+    }),
+  body("tipo_interes_sistema")
+    .optional({ nullable: true, checkFalsy: true })
+    .isIn(["porcentaje", "monto", null, ""])
+    .withMessage("Tipo de interés del sistema debe ser 'porcentaje', 'monto' o nulo"),
+  body("valor_interes_sistema")
+    .optional({ nullable: true })
+    .custom((value) => {
+      if (value !== null && value !== undefined) {
+        const valor = Number.parseFloat(value)
+        if (isNaN(valor) || valor < 0) {
+          throw new Error("El valor de interés del sistema debe ser un número positivo")
+        }
+      }
+      return true
+    }),
+  body("total_con_interes_tarjeta")
+    .optional({ nullable: true })
+    .custom((value) => {
+      if (value !== null && value !== undefined) {
+        const total = Number.parseFloat(value)
+        if (isNaN(total) || total < 0) {
+          throw new Error("El total con interés de tarjeta debe ser un número positivo")
+        }
+      }
+      return true
+    }),
+  body("interes_tarjeta")
+    .optional({ nullable: true })
+    .custom((value) => {
+      if (value !== null && value !== undefined) {
+        const interes = Number.parseFloat(value)
+        if (isNaN(interes) || interes < 0) {
+          throw new Error("El interés de tarjeta debe ser un número positivo")
+        }
+      }
+      return true
+    }),
+  body("tasa_interes_tarjeta")
+    .optional({ nullable: true })
+    .custom((value) => {
+      if (value !== null && value !== undefined) {
+        const tasa = Number.parseFloat(value)
+        if (isNaN(tasa) || tasa < 0 || tasa > 100) {
+          throw new Error("La tasa de interés de tarjeta debe ser un número entre 0 y 100")
+        }
+      }
+      return true
+    }),
+  body("observaciones")
+    .optional({ nullable: true })
+    .customSanitizer((value) => {
+      return value === null || value === undefined || value === "" ? null : value
+    })
+    .isLength({ max: 1000 })
+    .withMessage("Las observaciones no pueden tener más de 1000 caracteres"),
+  handleValidationErrors,
+]
+
 module.exports = {
   handleValidationErrors,
   validateLogin,
@@ -366,6 +609,7 @@ module.exports = {
   validateVehiculo,
   validateUser,
   validateId,
+  validateProductoId,
   validateClienteId,
   validateServicio,
   validateConfiguracion,
@@ -378,4 +622,8 @@ module.exports = {
   validateEmpleadoUpdate,
   validateSucursal,
   validateSucursalUpdate,
+  validateCategoria,
+  validateVenta,
+  validateProducto,
+  validateMovimientoStock,
 }

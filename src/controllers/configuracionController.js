@@ -40,7 +40,9 @@ const getConfiguracion = async (req, res) => {
 
 // Actualizar configuración
 const updateConfiguracion = async (req, res) => {
+  let transaction
   try {
+    console.log("[v0] Starting configuration update...")
     const { configuraciones } = req.body
 
     if (!configuraciones || !Array.isArray(configuraciones)) {
@@ -50,10 +52,15 @@ const updateConfiguracion = async (req, res) => {
       })
     }
 
-    await db.beginTransaction()
+    console.log("[v0] Configurations to update:", configuraciones)
+
+    // Create transaction object
+    transaction = await db.beginTransaction()
 
     for (const config of configuraciones) {
       const { categoria, clave, valor, tipo } = config
+
+      console.log(`[v0] Updating ${categoria}.${clave} to:`, valor)
 
       const updateQuery = `
         UPDATE configuracion 
@@ -61,18 +68,24 @@ const updateConfiguracion = async (req, res) => {
         WHERE categoria = ? AND clave = ? AND activo = 1
       `
 
-      await db.query(updateQuery, [valor, req.user.id, categoria, clave])
+      await transaction.query(updateQuery, [valor, req.user.id, categoria, clave])
     }
 
-    await db.commit()
+    // Commit the transaction
+    await transaction.commit()
+
+    console.log("[v0] Configuration updated successfully")
 
     res.json({
       success: true,
       message: "Configuración actualizada correctamente",
     })
   } catch (error) {
-    await db.rollback()
-    console.error("Error al actualizar configuración:", error)
+    // Rollback if transaction exists
+    if (transaction) {
+      await transaction.rollback()
+    }
+    console.error("[v0] Error updating configuration:", error)
     res.status(500).json({
       success: false,
       message: "Error al actualizar la configuración",
@@ -192,9 +205,9 @@ const deleteConfiguracion = async (req, res) => {
     })
   }
 }
- 
+
 module.exports = {
-  getConfiguracion,  
+  getConfiguracion,
   updateConfiguracion,
   getConfiguracionPorCategoria,
   createConfiguracion,

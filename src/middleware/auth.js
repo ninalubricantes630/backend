@@ -42,13 +42,10 @@ const authenticateToken = async (req, res, next) => {
       })
     }
 
-    // Verificar token JWT
     const decoded = jwt.verify(token, process.env.JWT_SECRET)
 
-    // Crear hash del token para verificar sesión
     const tokenHash = crypto.createHash("sha256").update(token).digest("hex")
 
-    // Verificar que el usuario existe y está activo
     const userQuery = `
       SELECT id, nombre, email, rol, activo, ultimo_login 
       FROM usuarios 
@@ -65,8 +62,8 @@ const authenticateToken = async (req, res, next) => {
       })
     }
 
-    // Verificar sesión activa
     const sessionValid = await verifySession(tokenHash, decoded.id)
+
     if (!sessionValid) {
       return res.status(401).json({
         success: false,
@@ -76,7 +73,6 @@ const authenticateToken = async (req, res, next) => {
       })
     }
 
-    // Agregar información del usuario a la request
     req.user = {
       id: users[0].id,
       nombre: users[0].nombre,
@@ -85,7 +81,6 @@ const authenticateToken = async (req, res, next) => {
       ultimo_login: users[0].ultimo_login,
     }
 
-    // Log del acceso
     await logAccess(
       req.user.id,
       req.method,
@@ -198,7 +193,6 @@ const userRateLimit = (maxRequests = 100, windowMs = 15 * 60 * 1000) => {
     const now = Date.now()
     const windowStart = now - windowMs
 
-    // Limpiar requests antiguos
     if (userRequests.has(userId)) {
       const requests = userRequests.get(userId).filter((time) => time > windowStart)
       userRequests.set(userId, requests)
@@ -242,24 +236,18 @@ const cleanExpiredSessions = async () => {
   }
 }
 
-// Limpiar sesiones expiradas cada hora
 setInterval(cleanExpiredSessions, 60 * 60 * 1000)
 
 module.exports = {
-  // Middlewares principales
   authenticateToken,
   requireRole,
   requireAdmin,
   requireEmployee,
   requireOwnershipOrAdmin,
   userRateLimit,
-
-  // Funciones utilitarias
   invalidateSession,
   cleanExpiredSessions,
   logAccess,
-
-  // Alias para compatibilidad
   verifyToken: authenticateToken,
   verifyRole: requireRole,
   verifyAdmin: requireAdmin,

@@ -5,14 +5,13 @@ const tiposServiciosController = {
   // Obtener todos los tipos de servicios
   getTiposServicios: async (req, res) => {
     try {
-      let page = parseInt(req.query.page, 10) || 1
-      let limit = parseInt(req.query.limit, 10) || 50
+      let page = Number.parseInt(req.query.page, 10) || 1
+      let limit = Number.parseInt(req.query.limit, 10) || 50
       const search = req.query.search || ""
 
-      // Normalizar valores
       page = page < 1 ? 1 : page
       limit = limit < 1 ? 50 : limit
-      limit = Math.min(limit, 100) // máximo 100
+      limit = Math.min(limit, 100)
       const offset = (page - 1) * limit
 
       let query = `SELECT * FROM tipos_servicios WHERE activo = true`
@@ -20,7 +19,6 @@ const tiposServiciosController = {
       const queryParams = []
       const countParams = []
 
-      // Filtro de búsqueda
       if (search) {
         query += " AND (nombre LIKE ? OR descripcion LIKE ?)"
         countQuery += " AND (nombre LIKE ? OR descripcion LIKE ?)"
@@ -29,17 +27,24 @@ const tiposServiciosController = {
         countParams.push(searchParam, searchParam)
       }
 
-      // Inyectar LIMIT/OFFSET validados directamente
       query += ` ORDER BY nombre ASC LIMIT ${limit} OFFSET ${offset}`
 
       const [tiposServicios] = await db.pool.execute(query, queryParams)
       const [countResult] = await db.pool.execute(countQuery, countParams)
       const total = countResult[0].total
 
-      return ResponseHelper.successWithPagination(
+      const totalPages = Math.ceil(total / limit)
+      return ResponseHelper.success(
         res,
-        tiposServicios,
-        { page, limit, total },
+        {
+          tiposServicios,
+          pagination: {
+            page,
+            limit,
+            total,
+            totalPages,
+          },
+        },
         "Tipos de servicios obtenidos exitosamente",
       )
     } catch (error) {

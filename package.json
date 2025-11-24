@@ -14,7 +14,7 @@
     "express",
     "mysql"
   ],
-  "author": "Milo Lubricantes",
+  "author": "Nina Lubricantes",
   "license": "ISC",
   "dependencies": {
     "express": "^4.18.2",
