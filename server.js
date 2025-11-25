@@ -29,6 +29,8 @@ if (process.env.NODE_ENV === "production") {
   app.set("trust proxy", 1) // Solo confiar en el primer proxy (Railway)
 }
 
+app.use(corsMiddleware)
+
 app.use(
   helmet({
     contentSecurityPolicy: {
@@ -75,6 +77,7 @@ const createRateLimit = (windowMs, max, message) =>
         ? req.ip || req.connection.remoteAddress
         : req.connection.remoteAddress
     },
+    skip: (req) => req.method === "OPTIONS",
   })
 
 // Rate limiting general
