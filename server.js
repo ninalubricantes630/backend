@@ -100,8 +100,6 @@ app.use(
   ),
 )
 
-app.use(corsMiddleware)
-
 if (process.env.NODE_ENV === "development") {
   app.use(requestLogger)
 } else {
