@@ -3,20 +3,26 @@ const logger = require("winston") // Assuming winston is used for logging
 
 const corsOptions = {
   origin: (origin, callback) => {
-    const frontendUrl = process.env.FRONTEND_URL || "http://localhost:5173"
+    const frontendUrl = process.env.FRONTEND_URL
 
     const allowedOrigins = [
-      frontendUrl
+      frontendUrl,
+      "http://localhost:3000",
+      "http://localhost:3001",
+      "http://localhost:5173",
+      "http://127.0.0.1:3000",
+      "http://127.0.0.1:3001",
+      "http://127.0.0.1:5173",
     ]
 
     if (process.env.NODE_ENV === "production" && frontendUrl) {
-      // Agregar el dominio sin www
-      if (frontendUrl.includes("www.")) {
-        allowedOrigins.push(frontendUrl.replace("www.", ""))
+      // Add domain without www if it has www
+      if (frontendUrl.includes("://www.")) {
+        allowedOrigins.push(frontendUrl.replace("://www.", "://"))
       }
-      // Agregar el dominio con www si no lo tiene
-      if (!frontendUrl.includes("www.")) {
-        allowedOrigins.push(frontendUrl.replace("https://", "https://www.").replace("http://", "http://www."))
+      // Add domain with www if it doesn't have www
+      if (!frontendUrl.includes("://www.")) {
+        allowedOrigins.push(frontendUrl.replace("://", "://www."))
       }
     }
 
