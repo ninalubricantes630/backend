@@ -1,13 +1,24 @@
 const cors = require("cors")
 const logger = require("winston") // Assuming winston is used for logging
 
-// Configuración de CORS mejorada
 const corsOptions = {
   origin: (origin, callback) => {
-    // Lista de orígenes permitidos
-    const frontendUrl = process.env.FRONTEND_URL
+    const frontendUrl = process.env.FRONTEND_URL || "http://localhost:5173"
+
     const allowedOrigins = [
-      frontendUrl,]
+      frontendUrl
+    ]
+
+    if (process.env.NODE_ENV === "production" && frontendUrl) {
+      // Agregar el dominio sin www
+      if (frontendUrl.includes("www.")) {
+        allowedOrigins.push(frontendUrl.replace("www.", ""))
+      }
+      // Agregar el dominio con www si no lo tiene
+      if (!frontendUrl.includes("www.")) {
+        allowedOrigins.push(frontendUrl.replace("https://", "https://www.").replace("http://", "http://www."))
+      }
+    }
 
     if (process.env.NODE_ENV === "development") {
       return callback(null, true)
