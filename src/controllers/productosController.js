@@ -8,23 +8,20 @@ const productosController = {
   getProductos: async (req, res) => {
     try {
       const {
-        page = 1,
-        limit = 10,
-        search = "",
+        search,
         categoria_id,
-        sucursal_id,
-        sucursales_ids,
+        unidad_medida,
         precio_min,
         precio_max,
-        unidad_medida,
+        sucursal_id,
+        sucursales_ids,
+        page = 1,
+        limit = 10,
+        offset: offsetParam = 0,
       } = req.query
 
-      const offset = (page - 1) * limit
       let query = `
-        SELECT 
-          p.*,
-          c.nombre as categoria_nombre,
-          s.nombre as sucursal_nombre
+        SELECT p.*, c.nombre as categoria_nombre, s.nombre as sucursal_nombre
         FROM productos p
         LEFT JOIN categorias c ON p.categoria_id = c.id
         LEFT JOIN sucursales s ON p.sucursal_id = s.id
@@ -95,10 +92,17 @@ const productosController = {
 
       query += ` ORDER BY p.created_at DESC LIMIT ? OFFSET ?`
 
-      const limitParam = Number.parseInt(limit) || 10
-      const offsetParam = Number.parseInt(offset) || 0
+      const limitNum = Math.max(1, Math.min(100, Number.parseInt(limit) || 10))
+      const offsetNum = Math.max(
+        0,
+        Number.parseInt(offsetParam) || Number.parseInt(page > 1 ? (page - 1) * limitNum : 0) || 0,
+      )
 
-      const [productos] = await db.pool.execute(query, [...queryParams, limitParam, offsetParam])
+      console.log("[v0] Query parameters:", queryParams.length, "Limit:", limitNum, "Offset:", offsetNum)
+
+      const finalParams = [...queryParams, limitNum, offsetNum]
+
+      const [productos] = await db.pool.execute(query, finalParams)
       const [countResult] = await db.pool.execute(countQuery, countParams)
       const total = countResult[0].total
 
@@ -106,12 +110,13 @@ const productosController = {
         productos,
         pagination: {
           page: Number.parseInt(page),
-          limit: Number.parseInt(limit),
+          limit: limitNum,
           total,
-          totalPages: Math.ceil(total / limit),
+          totalPages: Math.ceil(total / limitNum),
         },
       })
     } catch (error) {
+      console.error("[v0] Error al obtener productos:", error.message, error.stack)
       logger.error("Error al obtener productos:", error)
       return ResponseHelper.error(res, "Error al obtener productos", 500)
     }
