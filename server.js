@@ -1,4 +1,5 @@
 const express = require("express")
+const cors = require("cors")
 const helmet = require("helmet")
 const morgan = require("morgan")
 const rateLimit = require("express-rate-limit")
@@ -16,7 +17,6 @@ try {
   process.exit(1)
 }
 
-const { corsMiddleware } = require("./src/config/cors")
 const { notFoundHandler, globalErrorHandler, requestLogger, securityHeaders } = require("./src/middleware/errorHandler")
 const db = require("./src/config/database")
 const { startCleanupInterval, stopCleanupInterval } = require("./src/middleware/auth")
@@ -29,84 +29,14 @@ if (process.env.NODE_ENV === "production") {
   app.set("trust proxy", 1) // Solo confiar en el primer proxy (Railway)
 }
 
-app.use(corsMiddleware)
-
-app.options("*", corsMiddleware)
-
 app.use(
-  helmet({
-    contentSecurityPolicy: {
-      directives: {
-        defaultSrc: ["'self'"],
-        styleSrc: ["'self'", "'unsafe-inline'"],
-        scriptSrc: ["'self'"],
-        imgSrc: ["'self'", "data:", "https:"],
-      },
-    },
-    hsts: {
-      maxAge: 31536000,
-      includeSubDomains: true,
-      preload: true,
-    },
-    frameguard: {
-      action: "deny",
-    },
-    noSniff: true,
-    xssFilter: true,
+  cors({
+    origin: process.env.FRONTEND_URL || "https://www.ninalubricantes.site",
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
   }),
 )
-
-app.use(securityHeaders)
-
-const createRateLimit = (windowMs, max, message) =>
-  rateLimit({
-    windowMs,
-    max,
-    message: {
-      success: false,
-      error: {
-        message,
-        code: "RATE_LIMIT_EXCEEDED",
-        timestamp: new Date().toISOString(),
-      },
-    },
-    standardHeaders: true,
-    legacyHeaders: false,
-    trustProxy: process.env.NODE_ENV === "production",
-    keyGenerator: (req) => {
-      // En producción usar IP real, en desarrollo usar IP directa
-      return process.env.NODE_ENV === "production"
-        ? req.ip || req.connection.remoteAddress
-        : req.connection.remoteAddress
-    },
-    skip: (req) => req.method === "OPTIONS",
-  })
-
-// Rate limiting general
-app.use(
-  "/api/",
-  createRateLimit(
-    15 * 60 * 1000, // 15 minutos
-    100, // 100 requests
-    "Demasiadas solicitudes desde esta IP, intenta de nuevo más tarde.",
-  ),
-)
-
-// Rate limiting específico para login
-app.use(
-  "/api/auth/login",
-  createRateLimit(
-    15 * 60 * 1000, // 15 minutos
-    5, // 5 intentos de login
-    "Demasiados intentos de login, intenta de nuevo en 15 minutos.",
-  ),
-)
-
-if (process.env.NODE_ENV === "development") {
-  app.use(requestLogger)
-} else {
-  app.use(morgan("combined"))
-}
 
 // Body parsing con límites de seguridad
 app.use(
@@ -135,6 +65,91 @@ app.use(
     extended: true,
     limit: "10mb",
     parameterLimit: 1000,
+  }),
+)
+
+// Rate limiting general
+app.use(
+  "/api/",
+  rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutos
+    max: 100, // 100 requests
+    message: {
+      success: false,
+      error: {
+        message: "Demasiadas solicitudes desde esta IP, intenta de nuevo más tarde.",
+        code: "RATE_LIMIT_EXCEEDED",
+        timestamp: new Date().toISOString(),
+      },
+    },
+    standardHeaders: true,
+    legacyHeaders: false,
+    trustProxy: process.env.NODE_ENV === "production",
+    keyGenerator: (req) => {
+      // En producción usar IP real, en desarrollo usar IP directa
+      return process.env.NODE_ENV === "production"
+        ? req.ip || req.connection.remoteAddress
+        : req.connection.remoteAddress
+    },
+    skip: (req) => req.method === "OPTIONS",
+  }),
+)
+
+// Rate limiting específico para login
+app.use(
+  "/api/auth/login",
+  rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutos
+    max: 5, // 5 intentos de login
+    message: {
+      success: false,
+      error: {
+        message: "Demasiados intentos de login, intenta de nuevo en 15 minutos.",
+        code: "RATE_LIMIT_EXCEEDED",
+        timestamp: new Date().toISOString(),
+      },
+    },
+    standardHeaders: true,
+    legacyHeaders: false,
+    trustProxy: process.env.NODE_ENV === "production",
+    keyGenerator: (req) => {
+      // En producción usar IP real, en desarrollo usar IP directa
+      return process.env.NODE_ENV === "production"
+        ? req.ip || req.connection.remoteAddress
+        : req.connection.remoteAddress
+    },
+    skip: (req) => req.method === "OPTIONS",
+  }),
+)
+
+if (process.env.NODE_ENV === "development") {
+  app.use(requestLogger)
+} else {
+  app.use(morgan("combined"))
+}
+
+app.use(securityHeaders)
+
+app.use(
+  helmet({
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        styleSrc: ["'self'", "'unsafe-inline'"],
+        scriptSrc: ["'self'"],
+        imgSrc: ["'self'", "data:", "https:"],
+      },
+    },
+    hsts: {
+      maxAge: 31536000,
+      includeSubDomains: true,
+      preload: true,
+    },
+    frameguard: {
+      action: "deny",
+    },
+    noSniff: true,
+    xssFilter: true,
   }),
 )
 

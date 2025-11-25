@@ -4,18 +4,7 @@ const authController = require("../controllers/authController")
 const { verifyToken } = require("../middleware/auth")
 const { validateLogin } = require("../middleware/validation")
 
-const skipValidationForOptions = (req, res, next) => {
-  if (req.method === "OPTIONS") {
-    return next()
-  }
-  return validateLogin[validateLogin.length - 1](req, res, next)
-}
-
 // Rutas públicas
-router.options("/login", (req, res) => {
-  res.sendStatus(204)
-})
-
 router.post("/login", validateLogin, authController.login)
 
 // Rutas protegidas
