@@ -90,19 +90,17 @@ const productosController = {
         countParams.push(sucursal_id)
       }
 
-      query += ` ORDER BY p.created_at DESC LIMIT ? OFFSET ?`
-
       const limitNum = Math.max(1, Math.min(100, Number.parseInt(limit) || 10))
       const offsetNum = Math.max(
         0,
         Number.parseInt(offsetParam) || Number.parseInt(page > 1 ? (page - 1) * limitNum : 0) || 0,
       )
 
-      console.log("[v0] Query parameters:", queryParams.length, "Limit:", limitNum, "Offset:", offsetNum)
+      query += ` ORDER BY p.created_at DESC LIMIT ${limitNum} OFFSET ${offsetNum}`
 
-      const finalParams = [...queryParams, limitNum, offsetNum]
+      console.log("[v0] Query:", query.substring(0, 100) + "...", "Params count:", queryParams.length)
 
-      const [productos] = await db.pool.execute(query, finalParams)
+      const [productos] = await db.pool.execute(query, queryParams)
       const [countResult] = await db.pool.execute(countQuery, countParams)
       const total = countResult[0].total
 
