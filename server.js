@@ -100,8 +100,6 @@ app.use(
   ),
 )
 
-app.use(corsMiddleware)
-
 if (process.env.NODE_ENV === "development") {
   app.use(requestLogger)
 } else {
@@ -243,9 +241,9 @@ const startServer = async () => {
   server = app.listen(PORT, () => {
     logger.info("Servidor Nina Lubricantes iniciado", {
       port: PORT,
-      environment: process.env.NODE_ENV,
-      apiUrl: process.env.FRONTEND_URL,
-      corsUrl: process.env.FRONTEND_URL,
+      environment: process.env.NODE_ENV || "development",
+      apiUrl: `${process.env.FRONTEND_URL || "http://localhost:5000"}/api`,
+      corsUrl: process.env.FRONTEND_URL || "http://localhost:3000",
       timestamp: new Date().toISOString(),
     })
   })
