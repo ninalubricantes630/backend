@@ -95,7 +95,10 @@ const productosController = {
 
       query += ` ORDER BY p.created_at DESC LIMIT ? OFFSET ?`
 
-      const [productos] = await db.pool.execute(query, [...queryParams, Number.parseInt(limit), offset])
+      const limitParam = Number.parseInt(limit) || 10
+      const offsetParam = Number.parseInt(offset) || 0
+
+      const [productos] = await db.pool.execute(query, [...queryParams, limitParam, offsetParam])
       const [countResult] = await db.pool.execute(countQuery, countParams)
       const total = countResult[0].total
 
