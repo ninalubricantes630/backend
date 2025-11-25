@@ -5,11 +5,11 @@ const corsOptions = {
   origin: (origin, callback) => {
     const frontendUrl = process.env.FRONTEND_URL
 
-    const allowedOrigins = [
-      frontendUrl
-    ]
+    const allowedOrigins = []
 
-    if (process.env.NODE_ENV === "production" && frontendUrl) {
+    if (frontendUrl) {
+      allowedOrigins.push(frontendUrl)
+
       // Add domain without www if it has www
       if (frontendUrl.includes("://www.")) {
         allowedOrigins.push(frontendUrl.replace("://www.", "://"))
@@ -20,6 +20,11 @@ const corsOptions = {
       }
     }
 
+    if (process.env.NODE_ENV === "production") {
+      // Allow any Vercel app deployment
+      allowedOrigins.push(/\.vercel\.app$/)
+    }
+
     if (process.env.NODE_ENV === "development") {
       return callback(null, true)
     }
@@ -27,11 +32,17 @@ const corsOptions = {
     // Permitir requests sin origin (mobile apps, Postman, etc.)
     if (!origin) return callback(null, true)
 
-    // Verificar si el origin está en la lista permitida
-    if (allowedOrigins.includes(origin)) {
+    const isAllowed = allowedOrigins.some((allowedOrigin) => {
+      if (allowedOrigin instanceof RegExp) {
+        return allowedOrigin.test(origin)
+      }
+      return allowedOrigin === origin
+    })
+
+    if (isAllowed) {
       callback(null, true)
     } else {
-      logger.warn(`CORS blocked origin: ${origin}`)
+      logger.warn(`CORS blocked origin: ${origin}. Allowed origins: ${allowedOrigins.join(", ")}`)
       callback(new Error("No permitido por política CORS"), false)
     }
   },
