@@ -31,6 +31,8 @@ if (process.env.NODE_ENV === "production") {
 
 app.use(corsMiddleware)
 
+app.options("*", corsMiddleware)
+
 app.use(
   helmet({
     contentSecurityPolicy: {

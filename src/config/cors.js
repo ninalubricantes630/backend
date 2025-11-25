@@ -66,12 +66,10 @@ const corsOptions = {
   // Permitir cookies y credenciales
   credentials: true,
 
-  // Cache de preflight requests (24 horas)
   maxAge: 86400,
 
-  // Manejar preflight requests
   preflightContinue: false,
-  optionsSuccessStatus: 204,
+  optionsSuccessStatus: 200,
 }
 
 const corsMiddleware = cors(corsOptions)
