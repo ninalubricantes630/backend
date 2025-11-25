@@ -109,8 +109,8 @@ exports.getMovimientos = async (req, res) => {
        LEFT JOIN sesiones_caja sc ON mc.sesion_caja_id = sc.id
        ${whereClause}
        ORDER BY m.created_at DESC, m.id DESC
-       LIMIT ? OFFSET ?`,
-      [...params, Number.parseInt(limit), offset],
+       LIMIT ${Math.max(1, Math.min(100, Number.parseInt(limit) || 10))} OFFSET ${Math.max(0, Number.parseInt(offset) || 0)}`,
+      params,
     )
 
 

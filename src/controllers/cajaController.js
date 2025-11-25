@@ -294,8 +294,8 @@ const obtenerHistorialSesiones = async (req, res) => {
       LEFT JOIN sucursales s ON sc.sucursal_id = s.id
       ${whereClause}
       ORDER BY sc.fecha_apertura DESC
-      LIMIT ? OFFSET ?`,
-      [...queryParams, Number.parseInt(limit), offset],
+      LIMIT ${Number.parseInt(limit)} OFFSET ${offset}`,
+      queryParams,
     )
 
     return ResponseHelper.success(res, {
@@ -350,8 +350,8 @@ const obtenerMovimientos = async (req, res) => {
       LEFT JOIN usuarios u ON mc.usuario_id = u.id
       WHERE ${whereClause}
       ORDER BY mc.created_at DESC
-      LIMIT ? OFFSET ?`,
-      [...queryParams, limitNum, offset],
+      LIMIT ${limitNum} OFFSET ${offset}`,
+      queryParams,
     )
 
     // Obtener resumen

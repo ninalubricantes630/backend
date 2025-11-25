@@ -597,8 +597,8 @@ const obtenerVentas = async (req, res) => {
        LEFT JOIN sesiones_caja sc ON v.sesion_caja_id = sc.id
        ${whereClause}
        ORDER BY v.${sortBy} ${orderBy}
-       LIMIT ? OFFSET ?`,
-      [...queryParams, Number.parseInt(limit), offset],
+       LIMIT ${Math.max(1, Math.min(100, Number.parseInt(limit) || 10))} OFFSET ${Math.max(0, Number.parseInt(offset) || 0)}`,
+      queryParams,
     )
 
     const [totalResult] = await db.pool.execute(
