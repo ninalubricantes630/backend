@@ -73,7 +73,7 @@ app.use(
   "/api/",
   rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutos
-    max: 100, // 100 requests
+    max: 800, // Increased from 100 to 500 requests - more reasonable for active users
     message: {
       success: false,
       error: {
