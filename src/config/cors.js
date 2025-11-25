@@ -3,22 +3,18 @@ const logger = require("winston") // Assuming winston is used for logging
 
 const corsOptions = {
   origin: (origin, callback) => {
-    const frontendUrl = process.env.FRONTEND_URL || "http://localhost:5173"
+    const frontendUrl = process.env.FRONTEND_URL
 
     const allowedOrigins = [
-      frontendUrl,
-      "http://localhost:3000",
-      "http://localhost:3001",
-      "http://localhost:5173",
-      "http://127.0.0.1:3000",
-      "http://127.0.0.1:3001",
-      "http://127.0.0.1:5173",
+      frontendUrl
     ]
 
     if (process.env.NODE_ENV === "production" && frontendUrl) {
+      // Add domain without www if it has www
       if (frontendUrl.includes("://www.")) {
         allowedOrigins.push(frontendUrl.replace("://www.", "://"))
       }
+      // Add domain with www if it doesn't have www
       if (!frontendUrl.includes("://www.")) {
         allowedOrigins.push(frontendUrl.replace("://", "://www."))
       }
@@ -28,15 +24,15 @@ const corsOptions = {
       return callback(null, true)
     }
 
-    if (!origin) {
-      return callback(null, true)
-    }
+    // Permitir requests sin origin (mobile apps, Postman, etc.)
+    if (!origin) return callback(null, true)
 
-    // This allows the browser to see the rejection reason
+    // Verificar si el origin está en la lista permitida
     if (allowedOrigins.includes(origin)) {
       callback(null, true)
     } else {
-      callback(null, false)
+      logger.warn(`CORS blocked origin: ${origin}`)
+      callback(new Error("No permitido por política CORS"), false)
     }
   },
 
