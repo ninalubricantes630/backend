@@ -161,7 +161,7 @@ const getCurrentUser = ResponseHelper.asyncHandler(async (req, res) => {
   if (user.role === "empleado") {
     try {
       const permisosQuery = `
-        SELECT p.id, p.nombre, p.slug, p.modulo
+        SELECT p.id, p.nombre, p.codigo, p.modulo
         FROM usuario_permisos up
         JOIN permisos p ON up.permiso_id = p.id
         WHERE up.usuario_id = ?
@@ -171,7 +171,7 @@ const getCurrentUser = ResponseHelper.asyncHandler(async (req, res) => {
       permisos = permisosData.map((p) => ({
         id: p.id,
         nombre: p.nombre,
-        slug: p.slug,
+        codigo: p.codigo,
         modulo: p.modulo,
       }))
     } catch (error) {
@@ -325,7 +325,7 @@ const getProfile = ResponseHelper.asyncHandler(async (req, res) => {
   if (user.role === "empleado") {
     try {
       const permisosQuery = `
-        SELECT p.id, p.nombre, p.slug, p.modulo
+        SELECT p.id, p.nombre, p.codigo, p.modulo
         FROM usuario_permisos up
         JOIN permisos p ON up.permiso_id = p.id
         WHERE up.usuario_id = ?
@@ -335,7 +335,7 @@ const getProfile = ResponseHelper.asyncHandler(async (req, res) => {
       permisos = permisosData.map((p) => ({
         id: p.id,
         nombre: p.nombre,
-        slug: p.slug,
+        codigo: p.codigo,
         modulo: p.modulo,
       }))
     } catch (error) {
