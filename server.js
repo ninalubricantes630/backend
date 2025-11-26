@@ -155,6 +155,7 @@ app.use(
 
 app.use("/api/auth", require("./src/routes/authRoutes"))
 app.use("/api/users", require("./src/routes/usersRoutes"))
+app.use("/api/permisos", require("./src/routes/permisosRoutes")) // agregando rutas de permisos
 app.use("/api/clientes", require("./src/routes/clientesRoutes"))
 app.use("/api/vehiculos", require("./src/routes/vehiculosRoutes"))
 app.use("/api/servicios", require("./src/routes/serviciosRoutes"))
