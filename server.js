@@ -100,7 +100,7 @@ app.use(
   "/api/auth/login",
   rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutos
-    max: 5, // 5 intentos de login
+    max: 50, // 5 intentos de login
     message: {
       success: false,
       error: {
