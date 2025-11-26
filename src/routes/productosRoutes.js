@@ -15,6 +15,8 @@ router.put("/:id", validateId, productosController.updateProducto)
 router.delete("/:id", validateId, productosController.deleteProducto)
 router.patch("/:id/toggle-estado", validateId, productosController.toggleEstadoProducto)
 
+router.post("/:id/movimientos", validateId, productosController.registrarMovimiento)
+
 router.post("/importar-excel", productosController.importarProductosExcel)
 
 module.exports = router
