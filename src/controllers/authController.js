@@ -167,7 +167,7 @@ const getCurrentUser = ResponseHelper.asyncHandler(async (req, res) => {
         WHERE up.usuario_id = ?
       `
       const permisosData = await db.query(permisosQuery, [userId])
-      console.log("[v0] Permisos cargados para usuario", userId, ":", permisosData)
+      console.log("[v0 Backend] Permisos cargados para usuario", userId, ":", permisosData)
       permisos = permisosData.map((p) => ({
         id: p.id,
         nombre: p.nombre,
@@ -175,7 +175,7 @@ const getCurrentUser = ResponseHelper.asyncHandler(async (req, res) => {
         modulo: p.modulo,
       }))
     } catch (error) {
-      console.error("[v0] Error loading user permissions:", error)
+      console.error("[v0 Backend] Error loading user permissions:", error)
       permisos = []
     }
   }
@@ -187,7 +187,7 @@ const getCurrentUser = ResponseHelper.asyncHandler(async (req, res) => {
     permisos,
   }
 
-  console.log("[v0] getCurrentUser retornando:", {
+  console.log("[v0 Backend] getCurrentUser retornando:", {
     userId,
     role: userResponse.role,
     permisosCount: userResponse.permisos.length,
@@ -331,7 +331,7 @@ const getProfile = ResponseHelper.asyncHandler(async (req, res) => {
         WHERE up.usuario_id = ?
       `
       const permisosData = await db.query(permisosQuery, [userId])
-      console.log("[v0] Permisos cargados para usuario", userId, ":", permisosData)
+      console.log("[v0 Backend] Permisos cargados para usuario", userId, ":", permisosData)
       permisos = permisosData.map((p) => ({
         id: p.id,
         nombre: p.nombre,
@@ -339,7 +339,7 @@ const getProfile = ResponseHelper.asyncHandler(async (req, res) => {
         modulo: p.modulo,
       }))
     } catch (error) {
-      console.error("[v0] Error loading user permissions:", error)
+      console.error("[v0 Backend] Error loading user permissions:", error)
       permisos = []
     }
   }
@@ -351,7 +351,7 @@ const getProfile = ResponseHelper.asyncHandler(async (req, res) => {
     permisos,
   }
 
-  console.log("[v0] getProfile retornando:", {
+  console.log("[v0 Backend] getProfile retornando:", {
     userId,
     role: userResponse.role,
     permisosCount: userResponse.permisos.length,
