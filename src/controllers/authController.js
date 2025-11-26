@@ -102,11 +102,35 @@ const login = ResponseHelper.asyncHandler(async (req, res) => {
     })
   }
 
+  let permisos = []
+  if (user.rol === "empleado") {
+    try {
+      const permisosQuery = `
+        SELECT p.id, p.nombre, p.codigo, p.modulo
+        FROM usuario_permisos up
+        JOIN permisos p ON up.permiso_id = p.id
+        WHERE up.usuario_id = ?
+      `
+      const permisosData = await db.query(permisosQuery, [user.id])
+      console.log("[v0 Backend] Permisos cargados en login para usuario", user.id, ":", permisosData)
+      permisos = permisosData.map((p) => ({
+        id: p.id,
+        nombre: p.nombre,
+        codigo: p.codigo,
+        modulo: p.modulo,
+      }))
+    } catch (error) {
+      console.error("[v0 Backend] Error loading user permissions in login:", error)
+      permisos = []
+    }
+  }
+
   const { password: _, rol, sucursales_info, ...userWithoutPassword } = user
   const userResponse = {
     ...userWithoutPassword,
     role: rol,
     sucursales,
+    permisos,
   }
 
   return ResponseHelper.loginSuccess(res, userResponse, token)
