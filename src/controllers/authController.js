@@ -161,20 +161,21 @@ const getCurrentUser = ResponseHelper.asyncHandler(async (req, res) => {
   if (user.role === "empleado") {
     try {
       const permisosQuery = `
-        SELECT p.nombre, p.slug, p.modulo
+        SELECT p.id, p.nombre, p.slug, p.modulo
         FROM usuario_permisos up
         JOIN permisos p ON up.permiso_id = p.id
-        WHERE up.usuario_id = ? AND up.activo = 1
+        WHERE up.usuario_id = ?
       `
       const permisosData = await db.query(permisosQuery, [userId])
+      console.log("[v0] Permisos cargados para usuario", userId, ":", permisosData)
       permisos = permisosData.map((p) => ({
+        id: p.id,
         nombre: p.nombre,
         slug: p.slug,
         modulo: p.modulo,
       }))
     } catch (error) {
-      console.error("Error loading user permissions:", error)
-      // Si hay error al cargar permisos, retornar lista vacía
+      console.error("[v0] Error loading user permissions:", error)
       permisos = []
     }
   }
@@ -183,8 +184,15 @@ const getCurrentUser = ResponseHelper.asyncHandler(async (req, res) => {
     ...user,
     sucursales,
     sucursales_info: undefined,
-    permisos, // Agregar permisos a la respuesta
+    permisos,
   }
+
+  console.log("[v0] getCurrentUser retornando:", {
+    userId,
+    role: userResponse.role,
+    permisosCount: userResponse.permisos.length,
+    permisos: userResponse.permisos,
+  })
 
   return ResponseHelper.success(res, userResponse, "Usuario obtenido exitosamente")
 })
@@ -317,20 +325,21 @@ const getProfile = ResponseHelper.asyncHandler(async (req, res) => {
   if (user.role === "empleado") {
     try {
       const permisosQuery = `
-        SELECT p.nombre, p.slug, p.modulo
+        SELECT p.id, p.nombre, p.slug, p.modulo
         FROM usuario_permisos up
         JOIN permisos p ON up.permiso_id = p.id
-        WHERE up.usuario_id = ? AND up.activo = 1
+        WHERE up.usuario_id = ?
       `
       const permisosData = await db.query(permisosQuery, [userId])
+      console.log("[v0] Permisos cargados para usuario", userId, ":", permisosData)
       permisos = permisosData.map((p) => ({
+        id: p.id,
         nombre: p.nombre,
         slug: p.slug,
         modulo: p.modulo,
       }))
     } catch (error) {
-      console.error("Error loading user permissions:", error)
-      // Si hay error al cargar permisos, retornar lista vacía
+      console.error("[v0] Error loading user permissions:", error)
       permisos = []
     }
   }
@@ -339,8 +348,15 @@ const getProfile = ResponseHelper.asyncHandler(async (req, res) => {
     ...user,
     sucursales,
     sucursales_info: undefined,
-    permisos, // Agregar permisos a la respuesta
+    permisos,
   }
+
+  console.log("[v0] getProfile retornando:", {
+    userId,
+    role: userResponse.role,
+    permisosCount: userResponse.permisos.length,
+    permisos: userResponse.permisos,
+  })
 
   return ResponseHelper.success(res, userResponse, "Perfil obtenido exitosamente")
 })
