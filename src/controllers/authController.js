@@ -157,10 +157,33 @@ const getCurrentUser = ResponseHelper.asyncHandler(async (req, res) => {
     })
   }
 
+  let permisos = []
+  if (user.role === "empleado") {
+    try {
+      const permisosQuery = `
+        SELECT p.nombre, p.slug, p.modulo
+        FROM usuario_permisos up
+        JOIN permisos p ON up.permiso_id = p.id
+        WHERE up.usuario_id = ? AND up.activo = 1
+      `
+      const permisosData = await db.query(permisosQuery, [userId])
+      permisos = permisosData.map((p) => ({
+        nombre: p.nombre,
+        slug: p.slug,
+        modulo: p.modulo,
+      }))
+    } catch (error) {
+      console.error("Error loading user permissions:", error)
+      // Si hay error al cargar permisos, retornar lista vacía
+      permisos = []
+    }
+  }
+
   const userResponse = {
     ...user,
     sucursales,
     sucursales_info: undefined,
+    permisos, // Agregar permisos a la respuesta
   }
 
   return ResponseHelper.success(res, userResponse, "Usuario obtenido exitosamente")
@@ -290,10 +313,33 @@ const getProfile = ResponseHelper.asyncHandler(async (req, res) => {
     })
   }
 
+  let permisos = []
+  if (user.role === "empleado") {
+    try {
+      const permisosQuery = `
+        SELECT p.nombre, p.slug, p.modulo
+        FROM usuario_permisos up
+        JOIN permisos p ON up.permiso_id = p.id
+        WHERE up.usuario_id = ? AND up.activo = 1
+      `
+      const permisosData = await db.query(permisosQuery, [userId])
+      permisos = permisosData.map((p) => ({
+        nombre: p.nombre,
+        slug: p.slug,
+        modulo: p.modulo,
+      }))
+    } catch (error) {
+      console.error("Error loading user permissions:", error)
+      // Si hay error al cargar permisos, retornar lista vacía
+      permisos = []
+    }
+  }
+
   const userResponse = {
     ...user,
     sucursales,
     sucursales_info: undefined,
+    permisos, // Agregar permisos a la respuesta
   }
 
   return ResponseHelper.success(res, userResponse, "Perfil obtenido exitosamente")
