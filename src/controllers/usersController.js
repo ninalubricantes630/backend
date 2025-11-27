@@ -175,6 +175,38 @@ const createUser = async (req, res) => {
       )
     }
 
+    const permisosDefecto = [
+      "view_caja",
+      "abrir_caja",
+      "cerrar_caja",
+      "view_clientes",
+      "create_cliente",
+      "view_detalle_cliente",
+      "create_servicio",
+      "create_venta",
+      "view_stock",
+      "view_vehiculos",
+      "create_vehiculo",
+    ]
+
+    // Obtener los IDs de los permisos por defecto
+    const placeholders = permisosDefecto.map(() => "?").join(",")
+    const [permisos] = await connection.execute(
+      `SELECT id FROM permisos WHERE codigo IN (${placeholders})`,
+      permisosDefecto,
+    )
+
+    // Asignar los permisos al usuario
+    if (permisos.length > 0) {
+      const valuesPlaceholders = permisos.map(() => "(?, ?)").join(",")
+      const valuesParams = permisos.flatMap((permiso) => [userId, permiso.id])
+
+      await connection.execute(
+        `INSERT INTO usuarios_permisos (usuario_id, permiso_id) VALUES ${valuesPlaceholders}`,
+        valuesParams,
+      )
+    }
+
     await connection.commit()
 
     // Obtener el usuario creado con sus sucursales
