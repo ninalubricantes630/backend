@@ -196,13 +196,13 @@ const createUser = async (req, res) => {
       permisosDefecto,
     )
 
-    // Asignar los permisos al usuario
+    // Asignar los permisos al usuario (usando tabla usuario_permisos)
     if (permisos.length > 0) {
       const valuesPlaceholders = permisos.map(() => "(?, ?)").join(",")
       const valuesParams = permisos.flatMap((permiso) => [userId, permiso.id])
 
       await connection.execute(
-        `INSERT INTO usuarios_permisos (usuario_id, permiso_id) VALUES ${valuesPlaceholders}`,
+        `INSERT INTO usuario_permisos (usuario_id, permiso_id) VALUES ${valuesPlaceholders}`,
         valuesParams,
       )
     }
