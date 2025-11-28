@@ -196,13 +196,14 @@ const createUser = async (req, res) => {
       permisosDefecto,
     )
 
-    // Asignar los permisos al usuario (usando tabla usuario_permisos)
+    // Asignar los permisos al usuario con el campo otorgado_por
     if (permisos.length > 0) {
-      const valuesPlaceholders = permisos.map(() => "(?, ?)").join(",")
-      const valuesParams = permisos.flatMap((permiso) => [userId, permiso.id])
+      const adminId = req.user.id // ID del administrador que crea el usuario
+      const valuesPlaceholders = permisos.map(() => "(?, ?, ?)").join(",")
+      const valuesParams = permisos.flatMap((permiso) => [userId, permiso.id, adminId])
 
       await connection.execute(
-        `INSERT INTO usuario_permisos (usuario_id, permiso_id) VALUES ${valuesPlaceholders}`,
+        `INSERT INTO usuario_permisos (usuario_id, permiso_id, otorgado_por) VALUES ${valuesPlaceholders}`,
         valuesParams,
       )
     }
