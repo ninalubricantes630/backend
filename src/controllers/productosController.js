@@ -366,15 +366,8 @@ const productosController = {
       updateValues.push(sucursal_id)
 
       if (unidad_medida) {
-        const unidadActual = productos[0].unidad_medida
         updateFields.push("unidad_medida = ?")
         updateValues.push(unidad_medida)
-
-        // Si la unidad de medida cambió, poner el stock en cero
-        if (unidad_medida !== unidadActual) {
-          updateFields.push("stock = ?")
-          updateValues.push(0)
-        }
       }
 
       updateValues.push(id)
@@ -670,4 +663,3 @@ const productosController = {
 }
 
 module.exports = productosController
- 
