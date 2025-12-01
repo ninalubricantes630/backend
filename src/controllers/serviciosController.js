@@ -357,12 +357,12 @@ const serviciosController = {
 
       const [result] = await connection.execute(
         `INSERT INTO servicios (
-          numero, cliente_id, vehiculo_id, sucursal_id, observaciones,
+          numero, cliente_id, vehiculo_id, sucursal_id, descripcion, observaciones,
           subtotal, descuento, interes_sistema_porcentaje, interes_sistema_monto,
           total, interes_tarjeta_porcentaje, interes_tarjeta_monto, total_con_interes_tarjeta,
           tipo_pago, tarjeta_id, numero_cuotas, usuario_id, sesion_caja_id, fecha_pago, estado, activo
         ) 
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), 'COMPLETADA', 1)`,
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), 'COMPLETADA', 1)`,
         [
           numero,
           cliente_id,
