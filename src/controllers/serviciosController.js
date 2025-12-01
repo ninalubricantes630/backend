@@ -368,6 +368,7 @@ const serviciosController = {
           cliente_id,
           vehiculo_id,
           sucursal_id,
+          req.body.descripcion || "", // agregado campo descripcion faltante
           observaciones || null,
           Number(finalSubtotal).toFixed(2),
           Number(descuentoNum).toFixed(2),
