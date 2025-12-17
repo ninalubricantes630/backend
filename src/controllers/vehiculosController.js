@@ -59,15 +59,15 @@ const vehiculosController = {
       const countParams = []
 
       if (sucursal_id) {
-        query += " AND v.sucursal_id = ?"
-        countQuery += " AND v.sucursal_id = ?"
+        query += " AND (v.sucursal_id = ? OR v.sucursal_id IS NULL)"
+        countQuery += " AND (v.sucursal_id = ? OR v.sucursal_id IS NULL)"
         queryParams.push(sucursal_id)
         countParams.push(sucursal_id)
       } else if (sucursales_ids) {
         const idsArray = sucursales_ids.split(",").map((id) => id.trim())
         const placeholders = idsArray.map(() => "?").join(",")
-        query += ` AND v.sucursal_id IN (${placeholders})`
-        countQuery += ` AND v.sucursal_id IN (${placeholders})`
+        query += ` AND (v.sucursal_id IN (${placeholders}) OR v.sucursal_id IS NULL)`
+        countQuery += ` AND (v.sucursal_id IN (${placeholders}) OR v.sucursal_id IS NULL)`
         queryParams.push(...idsArray)
         countParams.push(...idsArray)
       }

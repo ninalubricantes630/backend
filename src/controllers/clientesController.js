@@ -53,15 +53,15 @@ const clientesController = {
       const countParams = []
 
       if (sucursal_id) {
-        query += " AND c.sucursal_id = ?"
-        countQuery += " AND c.sucursal_id = ?"
+        query += " AND (c.sucursal_id = ? OR c.sucursal_id IS NULL)"
+        countQuery += " AND (c.sucursal_id = ? OR c.sucursal_id IS NULL)"
         queryParams.push(sucursal_id)
         countParams.push(sucursal_id)
       } else if (sucursales_ids) {
         const idsArray = sucursales_ids.split(",").map((id) => id.trim())
         const placeholders = idsArray.map(() => "?").join(",")
-        query += ` AND c.sucursal_id IN (${placeholders})`
-        countQuery += ` AND c.sucursal_id IN (${placeholders})`
+        query += ` AND (c.sucursal_id IN (${placeholders}) OR c.sucursal_id IS NULL)`
+        countQuery += ` AND (c.sucursal_id IN (${placeholders}) OR c.sucursal_id IS NULL)`
         queryParams.push(...idsArray)
         countParams.push(...idsArray)
       }
