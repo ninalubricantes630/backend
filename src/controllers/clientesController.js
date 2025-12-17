@@ -5,7 +5,7 @@ const clientesController = {
   // Obtener todos los clientes con paginación y filtros
   getClientes: async (req, res) => {
     try {
-      let { page = 1, limit = 10, search = "", searchBy = "" } = req.query
+      let { page = 1, limit = 10, search = "", searchBy = "", sucursal_id = "", sucursales_ids = "" } = req.query
 
       page = Number.parseInt(page, 10) || 1
       limit = Number.parseInt(limit, 10) || 10
@@ -17,6 +17,7 @@ const clientesController = {
       let query = `
         SELECT DISTINCT
           c.id, c.nombre, c.apellido, c.dni, c.telefono, c.direccion, 
+          c.sucursal_id, s.nombre as sucursal_nombre,
           c.activo, c.created_at, c.updated_at,
           cc.id as cuenta_id,
           cc.saldo as saldo_cuenta,
@@ -27,22 +28,43 @@ const clientesController = {
             COALESCE(v.año, ''), '|', COALESCE(v.kilometraje, '')
           ) SEPARATOR ';;') as vehiculos_data,
           GROUP_CONCAT(DISTINCT CONCAT(
-            s.id, '|', s.numero, '|', s.descripcion, '|', 
-            DATE_FORMAT(s.created_at, '%Y-%m-%d'), '|', 
-            COALESCE(s.precio_referencia, ''), '|', v2.patente, '|',
-            COALESCE(s.observaciones, ''), '|', s.created_at
-          ) ORDER BY s.created_at DESC SEPARATOR ';;') as servicios_data
+            serv.id, '|', serv.numero, '|', serv.descripcion, '|', 
+            DATE_FORMAT(serv.created_at, '%Y-%m-%d'), '|', 
+            COALESCE(serv.precio_referencia, ''), '|', v2.patente, '|',
+            COALESCE(serv.observaciones, ''), '|', serv.created_at
+          ) ORDER BY serv.created_at DESC SEPARATOR ';;') as servicios_data
         FROM clientes c
+        LEFT JOIN sucursales s ON c.sucursal_id = s.id
         LEFT JOIN cuentas_corrientes cc ON c.id = cc.cliente_id AND cc.activo = 1
         LEFT JOIN vehiculos v ON c.id = v.cliente_id AND v.activo = true
-        LEFT JOIN servicios s ON c.id = s.cliente_id AND s.activo = true
-        LEFT JOIN vehiculos v2 ON s.vehiculo_id = v2.id
+        LEFT JOIN servicios serv ON c.id = serv.cliente_id AND serv.activo = true
+        LEFT JOIN vehiculos v2 ON serv.vehiculo_id = v2.id
         WHERE c.activo = true
       `
 
-      let countQuery = "SELECT COUNT(DISTINCT c.id) as total FROM clientes c WHERE c.activo = true"
+      let countQuery = `
+        SELECT COUNT(DISTINCT c.id) as total 
+        FROM clientes c 
+        LEFT JOIN sucursales s ON c.sucursal_id = s.id
+        WHERE c.activo = true
+      `
+
       const queryParams = []
       const countParams = []
+
+      if (sucursal_id) {
+        query += " AND c.sucursal_id = ?"
+        countQuery += " AND c.sucursal_id = ?"
+        queryParams.push(sucursal_id)
+        countParams.push(sucursal_id)
+      } else if (sucursales_ids) {
+        const idsArray = sucursales_ids.split(",").map((id) => id.trim())
+        const placeholders = idsArray.map(() => "?").join(",")
+        query += ` AND c.sucursal_id IN (${placeholders})`
+        countQuery += ` AND c.sucursal_id IN (${placeholders})`
+        queryParams.push(...idsArray)
+        countParams.push(...idsArray)
+      }
 
       if (search) {
         let searchCondition = ""
@@ -94,6 +116,8 @@ const clientesController = {
           dni: cliente.dni,
           telefono: cliente.telefono,
           direccion: cliente.direccion,
+          sucursal_id: cliente.sucursal_id,
+          sucursal_nombre: cliente.sucursal_nombre,
           activo: cliente.activo,
           created_at: cliente.created_at,
           updated_at: cliente.updated_at,
@@ -161,7 +185,11 @@ const clientesController = {
     const connection = await db.getConnection()
     try {
       const { id } = req.params
-      const [clientes] = await connection.execute("SELECT * FROM clientes WHERE id = ? AND activo = true", [id])
+
+      const [clientes] = await connection.execute(
+        "SELECT c.*, s.nombre as sucursal_nombre FROM clientes c LEFT JOIN sucursales s ON c.sucursal_id = s.id WHERE c.id = ? AND c.activo = true",
+        [id],
+      )
 
       if (clientes.length === 0) {
         return ResponseHelper.notFound(res, "Cliente no encontrado", "CLIENT_NOT_FOUND")
@@ -198,7 +226,8 @@ const clientesController = {
     try {
       await connection.beginTransaction()
 
-      const { nombre, apellido, dni, telefono, direccion, tiene_cuenta_corriente, limite_credito } = req.body
+      const { nombre, apellido, dni, telefono, direccion, tiene_cuenta_corriente, limite_credito, sucursal_id } =
+        req.body
 
       if (dni) {
         const [existingCliente] = await connection.execute("SELECT id FROM clientes WHERE dni = ? AND activo = true", [
@@ -211,10 +240,21 @@ const clientesController = {
         }
       }
 
+      if (sucursal_id) {
+        const [sucursales] = await connection.execute("SELECT id FROM sucursales WHERE id = ? AND activo = true", [
+          sucursal_id,
+        ])
+        if (sucursales.length === 0) {
+          await connection.rollback()
+          connection.release()
+          return ResponseHelper.error(res, "Sucursal no encontrada o inactiva", 400, "SUCURSAL_NOT_FOUND")
+        }
+      }
+
       const [result] = await connection.execute(
-        `INSERT INTO clientes (nombre, apellido, dni, telefono, direccion, activo) 
-         VALUES (?, ?, ?, ?, ?, true)`,
-        [nombre, apellido, dni || null, telefono || null, direccion || null],
+        `INSERT INTO clientes (nombre, apellido, dni, telefono, direccion, sucursal_id, activo) 
+         VALUES (?, ?, ?, ?, ?, ?, true)`,
+        [nombre, apellido, dni || null, telefono || null, direccion || null, sucursal_id || null],
       )
 
       const clienteId = result.insertId
@@ -247,7 +287,10 @@ const clientesController = {
 
       await connection.commit()
 
-      const [newCliente] = await connection.execute("SELECT * FROM clientes WHERE id = ?", [clienteId])
+      const [newCliente] = await connection.execute(
+        "SELECT c.*, s.nombre as sucursal_nombre FROM clientes c LEFT JOIN sucursales s ON c.sucursal_id = s.id WHERE c.id = ?",
+        [clienteId],
+      )
 
       const cliente = newCliente[0]
       if (tiene_cuenta_corriente === true || tiene_cuenta_corriente === "true") {
@@ -283,7 +326,8 @@ const clientesController = {
       await connection.beginTransaction()
 
       const { id } = req.params
-      const { nombre, apellido, dni, telefono, direccion, tiene_cuenta_corriente, limite_credito } = req.body
+      const { nombre, apellido, dni, telefono, direccion, tiene_cuenta_corriente, limite_credito, sucursal_id } =
+        req.body
 
       const [existingCliente] = await connection.execute("SELECT id FROM clientes WHERE id = ? AND activo = true", [id])
       if (existingCliente.length === 0) {
@@ -304,11 +348,22 @@ const clientesController = {
         }
       }
 
+      if (sucursal_id) {
+        const [sucursales] = await connection.execute("SELECT id FROM sucursales WHERE id = ? AND activo = true", [
+          sucursal_id,
+        ])
+        if (sucursales.length === 0) {
+          await connection.rollback()
+          connection.release()
+          return ResponseHelper.error(res, "Sucursal no encontrada o inactiva", 400, "SUCURSAL_NOT_FOUND")
+        }
+      }
+
       await connection.execute(
         `UPDATE clientes 
-         SET nombre = ?, apellido = ?, dni = ?, telefono = ?, direccion = ?, updated_at = NOW()
+         SET nombre = ?, apellido = ?, dni = ?, telefono = ?, direccion = ?, sucursal_id = ?, updated_at = NOW()
          WHERE id = ?`,
-        [nombre, apellido, dni || null, telefono || null, direccion || null, id],
+        [nombre, apellido, dni || null, telefono || null, direccion || null, sucursal_id || null, id],
       )
 
       const [cuentaExistente] = await connection.execute("SELECT * FROM cuentas_corrientes WHERE cliente_id = ?", [id])
@@ -354,7 +409,10 @@ const clientesController = {
 
       await connection.commit()
 
-      const [updatedCliente] = await connection.execute("SELECT * FROM clientes WHERE id = ?", [id])
+      const [updatedCliente] = await connection.execute(
+        "SELECT c.*, s.nombre as sucursal_nombre FROM clientes c LEFT JOIN sucursales s ON c.sucursal_id = s.id WHERE c.id = ?",
+        [id],
+      )
 
       const cliente = updatedCliente[0]
       const [cuentaCorriente] = await connection.execute(
