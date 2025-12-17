@@ -2,6 +2,7 @@ const db = require("../config/database")
 const ResponseHelper = require("../utils/responseHelper")
 const logger = require("../config/logger")
 const importHelper = require("../utils/importHelper")
+const XLSX = require("xlsx")
 
 const productosController = {
   // Obtener todos los productos con filtros y paginación
@@ -664,6 +665,7 @@ const productosController = {
   // Exportar productos a Excel
   exportarProductosExcel: async (req, res) => {
     try {
+      console.log("[v0] Iniciando exportación de productos a Excel")
       const { search, categoria_id, unidad_medida, precio_min, precio_max, sucursal_id, sucursales_ids } = req.query
 
       let query = `
@@ -733,10 +735,10 @@ const productosController = {
 
       query += " ORDER BY p.created_at DESC"
 
+      console.log("[v0] Ejecutando consulta SQL")
       const [productos] = await db.pool.execute(query, queryParams)
+      console.log(`[v0] Se encontraron ${productos.length} productos`)
 
-      // Crear el libro de Excel
-      const XLSX = require("xlsx")
       const workbook = XLSX.utils.book_new()
 
       // Formatear los datos para Excel
@@ -747,14 +749,16 @@ const productosController = {
         Descripción: p.descripcion || "",
         Categoría: p.categoria || "",
         "Unidad de Medida": p.unidad_medida || "",
-        Precio: p.precio,
-        Stock: p.stock,
-        "Stock Mínimo": p.stock_minimo,
+        Precio: Number(p.precio) || 0,
+        Stock: Number(p.stock) || 0,
+        "Stock Mínimo": Number(p.stock_minimo) || 0,
         Sucursal: p.sucursal || "",
         Fabricante: p.fabricante || "",
         Estado: p.activo ? "Activo" : "Inactivo",
         "Fecha de Creación": p.fecha_creacion,
       }))
+
+      console.log("[v0] Datos formateados para Excel")
 
       // Crear la hoja de trabajo
       const worksheet = XLSX.utils.json_to_sheet(datosExcel)
@@ -780,21 +784,33 @@ const productosController = {
       // Agregar la hoja al libro
       XLSX.utils.book_append_sheet(workbook, worksheet, "Productos")
 
-      // Generar el buffer del archivo Excel
-      const excelBuffer = XLSX.write(workbook, { type: "buffer", bookType: "xlsx" })
+      console.log("[v0] Generando buffer del archivo Excel")
+      const excelBuffer = XLSX.write(workbook, {
+        type: "buffer",
+        bookType: "xlsx",
+        compression: true,
+      })
 
-      // Configurar los headers de la respuesta
+      console.log(`[v0] Buffer generado, tamaño: ${excelBuffer.length} bytes`)
+
       const fecha = new Date().toISOString().split("T")[0]
+      const filename = `productos_${fecha}.xlsx`
+
       res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-      res.setHeader("Content-Disposition", `attachment; filename=productos_${fecha}.xlsx`)
+      res.setHeader("Content-Disposition", `attachment; filename="${filename}"`)
       res.setHeader("Content-Length", excelBuffer.length)
 
+      console.log("[v0] Enviando archivo Excel al cliente")
       // Enviar el archivo
       return res.send(excelBuffer)
     } catch (error) {
       console.error("[v0] Error al exportar productos a Excel:", error.message, error.stack)
       logger.error("Error al exportar productos a Excel:", error)
-      return ResponseHelper.error(res, "Error al exportar productos a Excel", 500)
+      return res.status(500).json({
+        success: false,
+        message: "Error al exportar productos a Excel",
+        error: error.message,
+      })
     }
   },
 }
