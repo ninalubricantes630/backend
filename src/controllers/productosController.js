@@ -664,117 +664,139 @@ const productosController = {
   // Exportar productos a Excel
   exportarProductosExcel: async (req, res) => {
     try {
-      const { sucursal_id, sucursales_ids } = req.query
-      const user = req.user
+      const { search, categoria_id, unidad_medida, precio_min, precio_max, sucursal_id, sucursales_ids } = req.query
 
-      // Construir condiciones de filtro
-      const whereConditions = ["p.activo = true"]
-      const queryParams = []
-
-      // Filtrar por sucursales del usuario
-      if (sucursal_id && sucursal_id !== "todas") {
-        whereConditions.push("p.sucursal_id = ?")
-        queryParams.push(sucursal_id)
-      } else if (sucursales_ids) {
-        const ids = sucursales_ids.split(",").filter((id) => id)
-        if (ids.length > 0) {
-          whereConditions.push(`(p.sucursal_id IN (${ids.map(() => "?").join(",")}) OR p.sucursal_id IS NULL)`)
-          queryParams.push(...ids)
-        }
-      } else if (user.sucursal_id) {
-        whereConditions.push("p.sucursal_id = ?")
-        queryParams.push(user.sucursal_id)
-      }
-
-      const whereClause = whereConditions.length > 0 ? `WHERE ${whereConditions.join(" AND ")}` : ""
-
-      const query = `
+      let query = `
         SELECT 
           p.id,
-          p.codigo_barra,
+          p.codigo,
           p.nombre,
           p.descripcion,
-          p.categoria_id,
-          c.nombre as categoria_nombre,
-          p.precio_compra,
-          p.precio_venta,
+          c.nombre as categoria,
+          p.unidad_medida,
+          p.precio,
+          p.stock,
           p.stock_minimo,
-          p.stock as stock_actual,
-          p.sucursal_id,
-          s.nombre as sucursal_nombre,
-          p.created_at,
-          p.updated_at
+          s.nombre as sucursal,
+          p.fabricante,
+          p.activo,
+          DATE_FORMAT(p.created_at, '%Y-%m-%d %H:%i:%s') as fecha_creacion
         FROM productos p
         LEFT JOIN categorias c ON p.categoria_id = c.id
         LEFT JOIN sucursales s ON p.sucursal_id = s.id
-        ${whereClause}
-        ORDER BY p.nombre ASC
+        WHERE p.activo = true
       `
+      const queryParams = []
 
-      const [productos] = await db.execute(query, queryParams)
+      // Aplicar los mismos filtros que en getProductos
+      if (search) {
+        query += " AND (p.nombre LIKE ? OR p.descripcion LIKE ? OR p.codigo LIKE ? OR p.fabricante LIKE ?)"
+        const searchParam = `%${search}%`
+        queryParams.push(searchParam, searchParam, searchParam, searchParam)
+      }
 
-      // Importar xlsx dinámicamente
+      if (categoria_id) {
+        query += " AND p.categoria_id = ?"
+        queryParams.push(categoria_id)
+      }
+
+      if (unidad_medida) {
+        query += " AND p.unidad_medida = ?"
+        queryParams.push(unidad_medida)
+      }
+
+      if (precio_min) {
+        query += " AND p.precio >= ?"
+        queryParams.push(Number.parseFloat(precio_min))
+      }
+
+      if (precio_max) {
+        query += " AND p.precio <= ?"
+        queryParams.push(Number.parseFloat(precio_max))
+      }
+
+      // Filtros de sucursales (igual que en getProductos)
+      if (sucursales_ids) {
+        const idsArray = sucursales_ids
+          .split(",")
+          .map((id) => id.trim())
+          .filter((id) => id)
+        if (idsArray.length > 0) {
+          const placeholders = idsArray.map(() => "?").join(",")
+          query += ` AND p.sucursal_id IN (${placeholders})`
+          queryParams.push(...idsArray)
+        }
+      } else if (sucursal_id) {
+        query += " AND p.sucursal_id = ?"
+        queryParams.push(sucursal_id)
+      }
+
+      query += " ORDER BY p.created_at DESC"
+
+      const [productos] = await db.pool.execute(query, queryParams)
+
+      // Crear el libro de Excel
       const XLSX = require("xlsx")
+      const workbook = XLSX.utils.book_new()
 
-      // Preparar datos para Excel
-      const datosExcel = productos.map((producto) => ({
-        ID: producto.id,
-        "Código de Barra": producto.codigo_barra || "",
-        Nombre: producto.nombre,
-        Descripción: producto.descripcion || "",
-        Categoría: producto.categoria_nombre || "",
-        "Precio Compra": Number.parseFloat(producto.precio_compra || 0),
-        "Precio Venta": Number.parseFloat(producto.precio_venta || 0),
-        "Stock Mínimo": Number.parseInt(producto.stock_minimo || 0),
-        "Stock Actual": Number.parseInt(producto.stock_actual || 0),
-        Sucursal: producto.sucursal_nombre || "",
-        "Fecha Creación": producto.created_at ? new Date(producto.created_at).toLocaleDateString("es-AR") : "",
-        "Última Actualización": producto.updated_at ? new Date(producto.updated_at).toLocaleDateString("es-AR") : "",
+      // Formatear los datos para Excel
+      const datosExcel = productos.map((p) => ({
+        ID: p.id,
+        Código: p.codigo || "",
+        Nombre: p.nombre,
+        Descripción: p.descripcion || "",
+        Categoría: p.categoria || "",
+        "Unidad de Medida": p.unidad_medida || "",
+        Precio: p.precio,
+        Stock: p.stock,
+        "Stock Mínimo": p.stock_minimo,
+        Sucursal: p.sucursal || "",
+        Fabricante: p.fabricante || "",
+        Estado: p.activo ? "Activo" : "Inactivo",
+        "Fecha de Creación": p.fecha_creacion,
       }))
 
-      // Crear libro de Excel
-      const workbook = XLSX.utils.book_new()
+      // Crear la hoja de trabajo
       const worksheet = XLSX.utils.json_to_sheet(datosExcel)
 
-      // Ajustar anchos de columna
+      // Ajustar el ancho de las columnas
       const columnWidths = [
         { wch: 8 }, // ID
-        { wch: 15 }, // Código de Barra
+        { wch: 15 }, // Código
         { wch: 30 }, // Nombre
         { wch: 40 }, // Descripción
         { wch: 20 }, // Categoría
-        { wch: 15 }, // Precio Compra
-        { wch: 15 }, // Precio Venta
-        { wch: 12 }, // Stock Mínimo
-        { wch: 12 }, // Stock Actual
+        { wch: 18 }, // Unidad de Medida
+        { wch: 12 }, // Precio
+        { wch: 10 }, // Stock
+        { wch: 15 }, // Stock Mínimo
         { wch: 20 }, // Sucursal
-        { wch: 15 }, // Fecha Creación
-        { wch: 18 }, // Última Actualización
+        { wch: 20 }, // Fabricante
+        { wch: 10 }, // Estado
+        { wch: 20 }, // Fecha de Creación
       ]
       worksheet["!cols"] = columnWidths
 
-      // Agregar hoja al libro
+      // Agregar la hoja al libro
       XLSX.utils.book_append_sheet(workbook, worksheet, "Productos")
 
-      // Generar buffer del Excel
+      // Generar el buffer del archivo Excel
       const excelBuffer = XLSX.write(workbook, { type: "buffer", bookType: "xlsx" })
 
-      // Configurar headers para descarga
+      // Configurar los headers de la respuesta
       const fecha = new Date().toISOString().split("T")[0]
-      const nombreArchivo = `productos_${fecha}.xlsx`
-
       res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-      res.setHeader("Content-Disposition", `attachment; filename="${nombreArchivo}"`)
+      res.setHeader("Content-Disposition", `attachment; filename=productos_${fecha}.xlsx`)
       res.setHeader("Content-Length", excelBuffer.length)
 
-      // Enviar archivo
+      // Enviar el archivo
       return res.send(excelBuffer)
     } catch (error) {
+      console.error("[v0] Error al exportar productos a Excel:", error.message, error.stack)
       logger.error("Error al exportar productos a Excel:", error)
-      return ResponseHelper.serverError(res, "Error al exportar productos a Excel")
+      return ResponseHelper.error(res, "Error al exportar productos a Excel", 500)
     }
   },
 }
 
 module.exports = productosController
- 
