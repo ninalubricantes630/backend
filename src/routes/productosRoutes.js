@@ -17,6 +17,7 @@ router.patch("/:id/toggle-estado", validateId, productosController.toggleEstadoP
 
 router.post("/:id/movimientos", validateId, productosController.registrarMovimiento)
 
+router.get("/exportar/excel", productosController.exportarProductosExcel)
 router.post("/importar-excel", productosController.importarProductosExcel)
 
 module.exports = router

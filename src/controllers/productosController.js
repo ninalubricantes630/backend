@@ -660,6 +660,120 @@ const productosController = {
       return ResponseHelper.serverError(res, "Error al importar productos desde Excel")
     }
   },
+
+  // Exportar productos a Excel
+  exportarProductosExcel: async (req, res) => {
+    try {
+      const { sucursal_id, sucursales_ids } = req.query
+      const user = req.user
+
+      // Construir condiciones de filtro
+      const whereConditions = ["p.activo = true"]
+      const queryParams = []
+
+      // Filtrar por sucursales del usuario
+      if (sucursal_id && sucursal_id !== "todas") {
+        whereConditions.push("p.sucursal_id = ?")
+        queryParams.push(sucursal_id)
+      } else if (sucursales_ids) {
+        const ids = sucursales_ids.split(",").filter((id) => id)
+        if (ids.length > 0) {
+          whereConditions.push(`(p.sucursal_id IN (${ids.map(() => "?").join(",")}) OR p.sucursal_id IS NULL)`)
+          queryParams.push(...ids)
+        }
+      } else if (user.sucursal_id) {
+        whereConditions.push("p.sucursal_id = ?")
+        queryParams.push(user.sucursal_id)
+      }
+
+      const whereClause = whereConditions.length > 0 ? `WHERE ${whereConditions.join(" AND ")}` : ""
+
+      const query = `
+        SELECT 
+          p.id,
+          p.codigo_barra,
+          p.nombre,
+          p.descripcion,
+          p.categoria_id,
+          c.nombre as categoria_nombre,
+          p.precio_compra,
+          p.precio_venta,
+          p.stock_minimo,
+          p.stock as stock_actual,
+          p.sucursal_id,
+          s.nombre as sucursal_nombre,
+          p.created_at,
+          p.updated_at
+        FROM productos p
+        LEFT JOIN categorias c ON p.categoria_id = c.id
+        LEFT JOIN sucursales s ON p.sucursal_id = s.id
+        ${whereClause}
+        ORDER BY p.nombre ASC
+      `
+
+      const [productos] = await db.execute(query, queryParams)
+
+      // Importar xlsx dinámicamente
+      const XLSX = require("xlsx")
+
+      // Preparar datos para Excel
+      const datosExcel = productos.map((producto) => ({
+        ID: producto.id,
+        "Código de Barra": producto.codigo_barra || "",
+        Nombre: producto.nombre,
+        Descripción: producto.descripcion || "",
+        Categoría: producto.categoria_nombre || "",
+        "Precio Compra": Number.parseFloat(producto.precio_compra || 0),
+        "Precio Venta": Number.parseFloat(producto.precio_venta || 0),
+        "Stock Mínimo": Number.parseInt(producto.stock_minimo || 0),
+        "Stock Actual": Number.parseInt(producto.stock_actual || 0),
+        Sucursal: producto.sucursal_nombre || "",
+        "Fecha Creación": producto.created_at ? new Date(producto.created_at).toLocaleDateString("es-AR") : "",
+        "Última Actualización": producto.updated_at ? new Date(producto.updated_at).toLocaleDateString("es-AR") : "",
+      }))
+
+      // Crear libro de Excel
+      const workbook = XLSX.utils.book_new()
+      const worksheet = XLSX.utils.json_to_sheet(datosExcel)
+
+      // Ajustar anchos de columna
+      const columnWidths = [
+        { wch: 8 }, // ID
+        { wch: 15 }, // Código de Barra
+        { wch: 30 }, // Nombre
+        { wch: 40 }, // Descripción
+        { wch: 20 }, // Categoría
+        { wch: 15 }, // Precio Compra
+        { wch: 15 }, // Precio Venta
+        { wch: 12 }, // Stock Mínimo
+        { wch: 12 }, // Stock Actual
+        { wch: 20 }, // Sucursal
+        { wch: 15 }, // Fecha Creación
+        { wch: 18 }, // Última Actualización
+      ]
+      worksheet["!cols"] = columnWidths
+
+      // Agregar hoja al libro
+      XLSX.utils.book_append_sheet(workbook, worksheet, "Productos")
+
+      // Generar buffer del Excel
+      const excelBuffer = XLSX.write(workbook, { type: "buffer", bookType: "xlsx" })
+
+      // Configurar headers para descarga
+      const fecha = new Date().toISOString().split("T")[0]
+      const nombreArchivo = `productos_${fecha}.xlsx`
+
+      res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+      res.setHeader("Content-Disposition", `attachment; filename="${nombreArchivo}"`)
+      res.setHeader("Content-Length", excelBuffer.length)
+
+      // Enviar archivo
+      return res.send(excelBuffer)
+    } catch (error) {
+      logger.error("Error al exportar productos a Excel:", error)
+      return ResponseHelper.serverError(res, "Error al exportar productos a Excel")
+    }
+  },
 }
 
 module.exports = productosController
