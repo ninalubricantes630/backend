@@ -47,6 +47,7 @@ const obtenerTarjetas = async (req, res) => {
 const obtenerTarjetaPorId = async (req, res) => {
   try {
     const { id } = req.params
+    const { sucursal_id } = req.query
 
     const [tarjeta] = await db.pool.execute("SELECT * FROM tarjetas_credito WHERE id = ?", [id])
 
@@ -54,13 +55,19 @@ const obtenerTarjetaPorId = async (req, res) => {
       return ResponseHelper.notFound(res, "Tarjeta no encontrada")
     }
 
-    const [cuotas] = await db.pool.execute(
-      `SELECT id, numero_cuotas, tasa_interes, activo
+    let cuotasQuery = `SELECT id, numero_cuotas, tasa_interes, activo, sucursal_id
        FROM tarjeta_cuotas
-       WHERE tarjeta_id = ?
-       ORDER BY numero_cuotas ASC`,
-      [id],
-    )
+       WHERE tarjeta_id = ?`
+    const queryParams = [id]
+
+    if (sucursal_id) {
+      cuotasQuery += ` AND sucursal_id = ?`
+      queryParams.push(sucursal_id)
+    }
+
+    cuotasQuery += ` ORDER BY numero_cuotas ASC`
+
+    const [cuotas] = await db.pool.execute(cuotasQuery, queryParams)
 
     return ResponseHelper.success(res, { ...tarjeta[0], cuotas })
   } catch (error) {
@@ -75,12 +82,28 @@ const crearTarjeta = async (req, res) => {
   try {
     await connection.beginTransaction()
 
-    const { nombre, descripcion, cuotas } = req.body
+    const { nombre, descripcion, cuotas, sucursal_id } = req.body
 
     if (!nombre || !cuotas || cuotas.length === 0) {
       await connection.rollback()
       connection.release()
       return ResponseHelper.validationError(res, "Nombre y configuración de cuotas son requeridos")
+    }
+
+    if (!sucursal_id) {
+      await connection.rollback()
+      connection.release()
+      return ResponseHelper.validationError(res, "La sucursal es requerida")
+    }
+
+    const [sucursalExists] = await connection.execute("SELECT id FROM sucursales WHERE id = ? AND activo = 1", [
+      sucursal_id,
+    ])
+
+    if (!sucursalExists.length) {
+      await connection.rollback()
+      connection.release()
+      return ResponseHelper.validationError(res, "La sucursal especificada no existe o está inactiva")
     }
 
     // Validar que las cuotas sean válidas
@@ -98,7 +121,7 @@ const crearTarjeta = async (req, res) => {
       }
     }
 
-    logger.info("[v0] Creando tarjeta:", { nombre, descripcion, cuotasCount: cuotas.length })
+    logger.info("[v0] Creando tarjeta:", { nombre, descripcion, cuotasCount: cuotas.length, sucursal_id })
 
     const [result] = await connection.execute("INSERT INTO tarjetas_credito (nombre, descripcion) VALUES (?, ?)", [
       nombre,
@@ -107,12 +130,11 @@ const crearTarjeta = async (req, res) => {
 
     const tarjeta_id = result.insertId
 
-    // Insertar cuotas
     for (const cuota of cuotas) {
       await connection.execute(
-        `INSERT INTO tarjeta_cuotas (tarjeta_id, numero_cuotas, tasa_interes, activo)
-         VALUES (?, ?, ?, ?)`,
-        [tarjeta_id, cuota.numero_cuotas, cuota.tasa_interes, cuota.activo !== false ? 1 : 0],
+        `INSERT INTO tarjeta_cuotas (tarjeta_id, sucursal_id, numero_cuotas, tasa_interes, activo)
+         VALUES (?, ?, ?, ?, ?)`,
+        [tarjeta_id, sucursal_id, cuota.numero_cuotas, cuota.tasa_interes, cuota.activo !== false ? 1 : 0],
       )
     }
 
@@ -128,7 +150,7 @@ const crearTarjeta = async (req, res) => {
       [tarjeta_id],
     )
 
-    logger.info("Tarjeta creada exitosamente:", { tarjeta_id, nombre })
+    logger.info("Tarjeta creada exitosamente:", { tarjeta_id, nombre, sucursal_id })
     return ResponseHelper.created(res, tarjeta[0], "Tarjeta creada exitosamente")
   } catch (error) {
     await connection.rollback()
@@ -145,7 +167,7 @@ const actualizarTarjeta = async (req, res) => {
     await connection.beginTransaction()
 
     const { id } = req.params
-    const { nombre, descripcion, cuotas } = req.body
+    const { nombre, descripcion, cuotas, sucursal_id } = req.body
 
     const [tarjetaExiste] = await connection.execute("SELECT id FROM tarjetas_credito WHERE id = ?", [id])
 
@@ -155,7 +177,7 @@ const actualizarTarjeta = async (req, res) => {
       return ResponseHelper.notFound(res, "Tarjeta no encontrada")
     }
 
-    logger.info("[v0] Actualizando tarjeta:", { id, nombre })
+    logger.info("[v0] Actualizando tarjeta:", { id, nombre, sucursal_id })
 
     // Actualizar datos de la tarjeta
     if (nombre || descripcion !== undefined) {
@@ -168,10 +190,14 @@ const actualizarTarjeta = async (req, res) => {
 
     // Si se envían cuotas, actualizar configuración
     if (cuotas && cuotas.length > 0) {
-      // Eliminar cuotas existentes
-      await connection.execute("DELETE FROM tarjeta_cuotas WHERE tarjeta_id = ?", [id])
+      if (!sucursal_id) {
+        await connection.rollback()
+        connection.release()
+        return ResponseHelper.validationError(res, "La sucursal es requerida para actualizar las cuotas")
+      }
 
-      // Insertar nuevas cuotas
+      await connection.execute("DELETE FROM tarjeta_cuotas WHERE tarjeta_id = ? AND sucursal_id = ?", [id, sucursal_id])
+
       for (const cuota of cuotas) {
         if (cuota.numero_cuotas < 1 || cuota.numero_cuotas > 12) {
           await connection.rollback()
@@ -180,19 +206,19 @@ const actualizarTarjeta = async (req, res) => {
         }
 
         await connection.execute(
-          `INSERT INTO tarjeta_cuotas (tarjeta_id, numero_cuotas, tasa_interes, activo)
-           VALUES (?, ?, ?, ?)`,
-          [id, cuota.numero_cuotas, cuota.tasa_interes, cuota.activo !== false ? 1 : 0],
+          `INSERT INTO tarjeta_cuotas (tarjeta_id, sucursal_id, numero_cuotas, tasa_interes, activo)
+           VALUES (?, ?, ?, ?, ?)`,
+          [id, sucursal_id, cuota.numero_cuotas, cuota.tasa_interes, cuota.activo !== false ? 1 : 0],
         )
       }
 
-      logger.info("[v0] Cuotas actualizadas:", { tarjeta_id: id, cuotasCount: cuotas.length })
+      logger.info("[v0] Cuotas actualizadas:", { tarjeta_id: id, sucursal_id, cuotasCount: cuotas.length })
     }
 
     await connection.commit()
     connection.release()
 
-    logger.info("Tarjeta actualizada exitosamente:", { id, nombre })
+    logger.info("Tarjeta actualizada exitosamente:", { id, nombre, sucursal_id })
     return ResponseHelper.success(res, null, "Tarjeta actualizada exitosamente")
   } catch (error) {
     await connection.rollback()
@@ -225,9 +251,16 @@ const eliminarTarjeta = async (req, res) => {
   }
 }
 
-// Obtener solo las tarjetas y cuotas activas para ventas
 const obtenerTarjetasParaVenta = async (req, res) => {
   try {
+    const { sucursal_id } = req.query
+
+    if (!sucursal_id) {
+      return ResponseHelper.validationError(res, "El ID de la sucursal es requerido")
+    }
+
+    logger.info("[v0] Cargando tarjetas para venta:", { sucursal_id })
+
     const [tarjetas] = await db.pool.execute(
       `SELECT 
         t.id,
@@ -243,16 +276,23 @@ const obtenerTarjetasParaVenta = async (req, res) => {
       const [cuotas] = await db.pool.execute(
         `SELECT id, numero_cuotas, tasa_interes
          FROM tarjeta_cuotas
-         WHERE tarjeta_id = ? AND activo = 1
+         WHERE tarjeta_id = ? AND sucursal_id = ? AND activo = 1
          ORDER BY numero_cuotas ASC`,
-        [tarjeta.id],
+        [tarjeta.id, sucursal_id],
       )
 
-      tarjetasConCuotas.push({
-        ...tarjeta,
-        cuotas: cuotas,
-      })
+      if (cuotas.length > 0) {
+        tarjetasConCuotas.push({
+          ...tarjeta,
+          cuotas: cuotas,
+        })
+      }
     }
+
+    logger.info("[v0] Tarjetas cargadas:", {
+      sucursal_id,
+      total_tarjetas: tarjetasConCuotas.length,
+    })
 
     return ResponseHelper.success(res, tarjetasConCuotas)
   } catch (error) {
@@ -261,17 +301,21 @@ const obtenerTarjetasParaVenta = async (req, res) => {
   }
 }
 
-// Obtener cuotas de una tarjeta específica
 const obtenerCuotasPorTarjeta = async (req, res) => {
   try {
     const { tarjeta_id } = req.params
+    const { sucursal_id } = req.query
+
+    if (!sucursal_id) {
+      return ResponseHelper.validationError(res, "El ID de la sucursal es requerido")
+    }
 
     const [cuotas] = await db.pool.execute(
       `SELECT id, numero_cuotas, tasa_interes
        FROM tarjeta_cuotas
-       WHERE tarjeta_id = ? AND activo = 1
+       WHERE tarjeta_id = ? AND sucursal_id = ? AND activo = 1
        ORDER BY numero_cuotas ASC`,
-      [tarjeta_id],
+      [tarjeta_id, sucursal_id],
     )
 
     return ResponseHelper.success(res, cuotas)
@@ -286,6 +330,7 @@ const obtenerTarjetasPaginadas = async (req, res) => {
     let page = Number.parseInt(req.query.page, 10) || 1
     let limit = Number.parseInt(req.query.limit, 10) || 10
     const search = req.query.search || ""
+    const { sucursal_id } = req.query
 
     page = page < 1 ? 1 : page
     limit = limit < 1 ? 10 : limit
@@ -301,9 +346,24 @@ const obtenerTarjetasPaginadas = async (req, res) => {
         t.created_at,
         COUNT(tc.id) as total_cuotas
        FROM tarjetas_credito t
-       LEFT JOIN tarjeta_cuotas tc ON t.id = tc.tarjeta_id AND tc.activo = 1
-       WHERE t.activo = 1`
+       LEFT JOIN tarjeta_cuotas tc ON t.id = tc.tarjeta_id AND tc.activo = 1`
     const queryParams = []
+
+    if (sucursal_id) {
+      query = `
+      SELECT 
+        t.id,
+        t.nombre,
+        t.descripcion,
+        t.activo,
+        t.created_at,
+        COUNT(tc.id) as total_cuotas
+       FROM tarjetas_credito t
+       LEFT JOIN tarjeta_cuotas tc ON t.id = tc.tarjeta_id AND tc.activo = 1 AND tc.sucursal_id = ?`
+      queryParams.push(sucursal_id)
+    }
+
+    query += ` WHERE t.activo = 1`
 
     if (search) {
       query += " AND (t.nombre LIKE ? OR t.descripcion LIKE ?)"
@@ -322,13 +382,19 @@ const obtenerTarjetasPaginadas = async (req, res) => {
 
     const tarjetasConCuotas = []
     for (const tarjeta of tarjetas) {
-      const [cuotas] = await db.pool.execute(
-        `SELECT id, numero_cuotas, tasa_interes, activo
+      let cuotasQuery = `SELECT id, numero_cuotas, tasa_interes, activo, sucursal_id
          FROM tarjeta_cuotas
-         WHERE tarjeta_id = ?
-         ORDER BY numero_cuotas ASC`,
-        [tarjeta.id],
-      )
+         WHERE tarjeta_id = ?`
+      const cuotasParams = [tarjeta.id]
+
+      if (sucursal_id) {
+        cuotasQuery += ` AND sucursal_id = ?`
+        cuotasParams.push(sucursal_id)
+      }
+
+      cuotasQuery += ` ORDER BY numero_cuotas ASC`
+
+      const [cuotas] = await db.pool.execute(cuotasQuery, cuotasParams)
       tarjetasConCuotas.push({ ...tarjeta, cuotas })
     }
 
