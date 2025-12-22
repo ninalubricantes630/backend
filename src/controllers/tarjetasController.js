@@ -202,8 +202,10 @@ const actualizarTarjeta = async (req, res) => {
         return ResponseHelper.validationError(res, "La sucursal es requerida para actualizar las cuotas")
       }
 
-      await connection.execute("DELETE FROM tarjeta_cuotas WHERE tarjeta_id = ? AND sucursal_id = ?", [id, sucursal_id])
+      await connection.execute("DELETE FROM tarjeta_cuotas WHERE tarjeta_id = ?", [id])
+      logger.info("[v0] Cuotas eliminadas para tarjeta:", { tarjeta_id: id })
 
+      // Insertar las nuevas cuotas con la nueva sucursal
       for (const cuota of cuotas) {
         if (cuota.numero_cuotas < 1 || cuota.numero_cuotas > 12) {
           await connection.rollback()
