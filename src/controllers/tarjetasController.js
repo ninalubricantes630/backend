@@ -344,9 +344,12 @@ const obtenerTarjetasPaginadas = async (req, res) => {
         t.descripcion,
         t.activo,
         t.created_at,
-        COUNT(tc.id) as total_cuotas
+        COUNT(DISTINCT tc.id) as total_cuotas,
+        GROUP_CONCAT(DISTINCT s.nombre SEPARATOR ', ') as sucursales_nombres,
+        GROUP_CONCAT(DISTINCT tc.sucursal_id) as sucursales_ids
        FROM tarjetas_credito t
-       LEFT JOIN tarjeta_cuotas tc ON t.id = tc.tarjeta_id AND tc.activo = 1`
+       LEFT JOIN tarjeta_cuotas tc ON t.id = tc.tarjeta_id AND tc.activo = 1
+       LEFT JOIN sucursales s ON tc.sucursal_id = s.id`
     const queryParams = []
 
     if (sucursal_id) {
@@ -357,9 +360,12 @@ const obtenerTarjetasPaginadas = async (req, res) => {
         t.descripcion,
         t.activo,
         t.created_at,
-        COUNT(tc.id) as total_cuotas
+        COUNT(tc.id) as total_cuotas,
+        s.nombre as sucursales_nombres,
+        tc.sucursal_id as sucursales_ids
        FROM tarjetas_credito t
-       LEFT JOIN tarjeta_cuotas tc ON t.id = tc.tarjeta_id AND tc.activo = 1 AND tc.sucursal_id = ?`
+       LEFT JOIN tarjeta_cuotas tc ON t.id = tc.tarjeta_id AND tc.activo = 1 AND tc.sucursal_id = ?
+       LEFT JOIN sucursales s ON tc.sucursal_id = s.id`
       queryParams.push(sucursal_id)
     }
 
