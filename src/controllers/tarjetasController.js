@@ -69,7 +69,13 @@ const obtenerTarjetaPorId = async (req, res) => {
 
     const [cuotas] = await db.pool.execute(cuotasQuery, queryParams)
 
-    return ResponseHelper.success(res, { ...tarjeta[0], cuotas })
+    const tarjetaConCuotas = {
+      ...tarjeta[0],
+      cuotas,
+      sucursal_id: cuotas.length > 0 ? cuotas[0].sucursal_id : null,
+    }
+
+    return ResponseHelper.success(res, tarjetaConCuotas)
   } catch (error) {
     logger.error("Error al obtener tarjeta:", error)
     return ResponseHelper.error(res, "Error al obtener la tarjeta", 500)
