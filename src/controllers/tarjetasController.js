@@ -112,6 +112,21 @@ const crearTarjeta = async (req, res) => {
       return ResponseHelper.validationError(res, "La sucursal especificada no existe o está inactiva")
     }
 
+    const [tarjetaExistente] = await connection.execute(
+      `SELECT t.id, t.nombre 
+       FROM tarjetas_credito t
+       INNER JOIN tarjeta_cuotas tc ON t.id = tc.tarjeta_id
+       WHERE t.nombre = ? AND tc.sucursal_id = ? AND t.activo = 1
+       LIMIT 1`,
+      [nombre, sucursal_id],
+    )
+
+    if (tarjetaExistente.length > 0) {
+      await connection.rollback()
+      connection.release()
+      return ResponseHelper.validationError(res, `Ya existe una tarjeta con el nombre "${nombre}" en esta sucursal`)
+    }
+
     // Validar que las cuotas sean válidas
     for (const cuota of cuotas) {
       if (!cuota.numero_cuotas || cuota.tasa_interes === undefined) {
@@ -183,7 +198,22 @@ const actualizarTarjeta = async (req, res) => {
       return ResponseHelper.notFound(res, "Tarjeta no encontrada")
     }
 
-    logger.info("[v0] Actualizando tarjeta:", { id, nombre, sucursal_id })
+    if (nombre && sucursal_id) {
+      const [tarjetaDuplicada] = await connection.execute(
+        `SELECT t.id, t.nombre 
+         FROM tarjetas_credito t
+         INNER JOIN tarjeta_cuotas tc ON t.id = tc.tarjeta_id
+         WHERE t.nombre = ? AND tc.sucursal_id = ? AND t.activo = 1 AND t.id != ?
+         LIMIT 1`,
+        [nombre, sucursal_id, id],
+      )
+
+      if (tarjetaDuplicada.length > 0) {
+        await connection.rollback()
+        connection.release()
+        return ResponseHelper.validationError(res, `Ya existe otra tarjeta con el nombre "${nombre}" en esta sucursal`)
+      }
+    }
 
     // Actualizar datos de la tarjeta
     if (nombre || descripcion !== undefined) {
@@ -203,7 +233,6 @@ const actualizarTarjeta = async (req, res) => {
       }
 
       await connection.execute("DELETE FROM tarjeta_cuotas WHERE tarjeta_id = ?", [id])
-      logger.info("[v0] Cuotas eliminadas para tarjeta:", { tarjeta_id: id })
 
       // Insertar las nuevas cuotas con la nueva sucursal
       for (const cuota of cuotas) {
@@ -219,8 +248,6 @@ const actualizarTarjeta = async (req, res) => {
           [id, sucursal_id, cuota.numero_cuotas, cuota.tasa_interes, cuota.activo !== false ? 1 : 0],
         )
       }
-
-      logger.info("[v0] Cuotas actualizadas:", { tarjeta_id: id, sucursal_id, cuotasCount: cuotas.length })
     }
 
     await connection.commit()
@@ -236,29 +263,78 @@ const actualizarTarjeta = async (req, res) => {
   }
 }
 
-// Eliminar tarjeta (desactivar)
 const eliminarTarjeta = async (req, res) => {
+  const connection = await db.pool.getConnection()
   try {
+    await connection.beginTransaction()
+
     const { id } = req.params
 
-    const [tarjeta] = await db.pool.execute("SELECT id FROM tarjetas_credito WHERE id = ?", [id])
+    const [tarjeta] = await connection.execute("SELECT id, nombre FROM tarjetas_credito WHERE id = ?", [id])
 
     if (!tarjeta.length) {
+      await connection.rollback()
+      connection.release()
       return ResponseHelper.notFound(res, "Tarjeta no encontrada")
     }
 
-    logger.info("[v0] Desactivando tarjeta:", { id })
+    // Verificar si tiene transacciones en ventas
+    const [ventasConTarjeta] = await connection.execute("SELECT COUNT(*) as total FROM ventas WHERE tarjeta_id = ?", [
+      id,
+    ])
 
-    await db.pool.execute("UPDATE tarjetas_credito SET activo = 0 WHERE id = ?", [id])
+    // Verificar si tiene transacciones en servicios
+    const [serviciosConTarjeta] = await connection.execute(
+      "SELECT COUNT(*) as total FROM servicios WHERE tarjeta_id = ?",
+      [id],
+    )
 
-    logger.info("Tarjeta desactivada exitosamente:", { id })
-    return ResponseHelper.success(res, null, "Tarjeta desactivada exitosamente")
+    const totalTransacciones = ventasConTarjeta[0].total + serviciosConTarjeta[0].total
+
+    if (totalTransacciones > 0) {
+      // Si tiene transacciones, solo desactivar
+      await connection.execute("UPDATE tarjetas_credito SET activo = 0 WHERE id = ?", [id])
+      await connection.commit()
+      connection.release()
+
+      logger.info("Tarjeta desactivada (tiene transacciones):", {
+        id,
+        nombre: tarjeta[0].nombre,
+        totalTransacciones,
+      })
+
+      return ResponseHelper.success(
+        res,
+        { desactivada: true, transacciones: totalTransacciones },
+        `La tarjeta fue desactivada porque tiene ${totalTransacciones} transacción(es) asociada(s)`,
+      )
+    } else {
+      // Si no tiene transacciones, eliminar completamente
+      // Primero eliminar las cuotas (CASCADE lo hace automáticamente, pero lo hacemos explícito)
+      await connection.execute("DELETE FROM tarjeta_cuotas WHERE tarjeta_id = ?", [id])
+
+      // Luego eliminar la tarjeta
+      await connection.execute("DELETE FROM tarjetas_credito WHERE id = ?", [id])
+
+      await connection.commit()
+      connection.release()
+
+      logger.info("Tarjeta eliminada completamente (sin transacciones):", {
+        id,
+        nombre: tarjeta[0].nombre,
+      })
+
+      return ResponseHelper.success(res, { eliminada: true }, "La tarjeta fue eliminada completamente")
+    }
   } catch (error) {
-    logger.error("[v0] Error al eliminar tarjeta:", error)
+    await connection.rollback()
+    connection.release()
+    logger.error("Error al eliminar tarjeta:", error)
     return ResponseHelper.error(res, `Error al eliminar la tarjeta: ${error.message}`, 500)
   }
 }
 
+// Obtener tarjetas para venta
 const obtenerTarjetasParaVenta = async (req, res) => {
   try {
     const { sucursal_id } = req.query
@@ -309,6 +385,7 @@ const obtenerTarjetasParaVenta = async (req, res) => {
   }
 }
 
+// Obtener cuotas por tarjeta
 const obtenerCuotasPorTarjeta = async (req, res) => {
   try {
     const { tarjeta_id } = req.params
@@ -333,6 +410,7 @@ const obtenerCuotasPorTarjeta = async (req, res) => {
   }
 }
 
+// Obtener tarjetas paginadas
 const obtenerTarjetasPaginadas = async (req, res) => {
   try {
     let page = Number.parseInt(req.query.page, 10) || 1
