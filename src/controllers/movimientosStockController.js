@@ -58,8 +58,7 @@ const movimientosStockController = {
 
       const usuarioId = req.user.id
 
-      // Validar campos requeridos
-      if (!producto_id || !tipo || !cantidad) {
+      if (!producto_id || !tipo || cantidad === undefined || cantidad === null || cantidad === "") {
         await connection.rollback()
         connection.release()
         return ResponseHelper.validationError(res, "Faltan campos requeridos")
@@ -73,10 +72,24 @@ const movimientosStockController = {
       }
 
       const cantidadNum = Number.parseFloat(cantidad)
-      if (isNaN(cantidadNum) || cantidadNum < 0) {
+      if (isNaN(cantidadNum)) {
         await connection.rollback()
         connection.release()
-        return ResponseHelper.validationError(res, "La cantidad debe ser un número mayor o igual a 0")
+        return ResponseHelper.validationError(res, "La cantidad debe ser un número válido")
+      }
+
+      // Para ENTRADA y SALIDA, la cantidad debe ser mayor a 0
+      if ((tipo === "ENTRADA" || tipo === "SALIDA") && cantidadNum <= 0) {
+        await connection.rollback()
+        connection.release()
+        return ResponseHelper.validationError(res, "La cantidad debe ser mayor a 0 para entrada/salida")
+      }
+
+      // Para AJUSTE, la cantidad puede ser 0 o positiva (el nuevo stock total)
+      if (tipo === "AJUSTE" && cantidadNum < 0) {
+        await connection.rollback()
+        connection.release()
+        return ResponseHelper.validationError(res, "La cantidad para ajuste no puede ser negativa")
       }
 
       // Obtener producto actual

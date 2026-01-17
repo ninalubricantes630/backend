@@ -417,12 +417,16 @@ const validateMovimientoStock = [
   body("cantidad")
     .custom((value, { req }) => {
       const cantidadNum = Number.parseFloat(value)
-      if (isNaN(cantidadNum) || cantidadNum < 0) {
-        throw new Error("La cantidad debe ser un número mayor o igual a 0")
+      if (isNaN(cantidadNum)) {
+        throw new Error("La cantidad debe ser un número válido")
       }
-      // Para AJUSTE se permite 0, para ENTRADA y SALIDA debe ser mayor a 0
+      // Para ENTRADA y SALIDA debe ser mayor a 0
       if ((req.body.tipo === "ENTRADA" || req.body.tipo === "SALIDA") && cantidadNum <= 0) {
         throw new Error("La cantidad debe ser mayor a 0 para entrada/salida")
+      }
+      // Para AJUSTE, la cantidad puede ser 0 o positiva (representa el nuevo stock total)
+      if (req.body.tipo === "AJUSTE" && cantidadNum < 0) {
+        throw new Error("La cantidad para ajuste no puede ser negativa")
       }
       return true
     })
