@@ -187,7 +187,7 @@ const productosController = {
       if (isNaN(stockNum) || stockNum < 0) {
         await connection.rollback()
         connection.release()
-        return ResponseHelper.validationError(res, "El stock debe ser un número positivo")
+        return ResponseHelper.validationError(res, "El stock debe ser un número mayor o igual a 0")
       }
 
       if (unidad_medida === "unidad" && !Number.isInteger(stockNum)) {

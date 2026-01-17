@@ -73,10 +73,10 @@ const movimientosStockController = {
       }
 
       const cantidadNum = Number.parseFloat(cantidad)
-      if (isNaN(cantidadNum) || cantidadNum <= 0) {
+      if (isNaN(cantidadNum) || cantidadNum < 0) {
         await connection.rollback()
         connection.release()
-        return ResponseHelper.validationError(res, "La cantidad debe ser un número mayor a 0")
+        return ResponseHelper.validationError(res, "La cantidad debe ser un número mayor o igual a 0")
       }
 
       // Obtener producto actual
@@ -110,11 +110,7 @@ const movimientosStockController = {
           break
         case "SALIDA":
           stockNuevo = stockAnterior - cantidadNum
-          if (stockNuevo < 0) {
-            await connection.rollback()
-            connection.release()
-            return ResponseHelper.validationError(res, "Stock insuficiente para realizar la salida")
-          }
+          // Se permite stock negativo, no hay validación
           break
         case "AJUSTE":
           stockNuevo = cantidadNum // En ajuste, la cantidad es el nuevo stock total

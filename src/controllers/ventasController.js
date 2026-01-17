@@ -255,14 +255,7 @@ const crearVenta = async (req, res) => {
         )
       }
 
-      if (stockNum < cantidadNum) {
-        await connection.rollback()
-        connection.release()
-        return ResponseHelper.validationError(
-          res,
-          `Stock insuficiente para el producto ${producto[0].nombre}. Stock disponible: ${stockNum}`,
-        )
-      }
+      // El stock puede quedar en negativo después de la venta
 
       item._unidad_medida = unidad_medida
       item._cantidad_numerica = cantidadNum
