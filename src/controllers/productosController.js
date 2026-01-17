@@ -491,11 +491,6 @@ const productosController = {
           break
         case "SALIDA":
           stockNuevo = stockAnterior - cantidadNum
-          if (stockNuevo < 0) {
-            await connection.rollback()
-            connection.release()
-            return ResponseHelper.validationError(res, "Stock insuficiente")
-          }
           break
         case "AJUSTE":
           stockNuevo = cantidadNum

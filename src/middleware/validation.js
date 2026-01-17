@@ -53,10 +53,7 @@ const validateChangePassword = [
 ]
 
 const validateCliente = [
-  body("nombre")
-    .trim()
-    .isLength({ min: 2, max: 100 })
-    .withMessage("El nombre debe tener entre 2 y 100 caracteres"),
+  body("nombre").trim().isLength({ min: 2, max: 100 }).withMessage("El nombre debe tener entre 2 y 100 caracteres"),
   body("apellido")
     .trim()
     .isLength({ min: 2, max: 100 })
@@ -121,10 +118,7 @@ const validateVehiculo = [
 ]
 
 const validateUser = [
-  body("nombre")
-    .trim()
-    .isLength({ min: 2, max: 100 })
-    .withMessage("El nombre debe tener entre 2 y 100 caracteres"),
+  body("nombre").trim().isLength({ min: 2, max: 100 }).withMessage("El nombre debe tener entre 2 y 100 caracteres"),
   body("email")
     .isEmail()
     .withMessage("Email inválido")
@@ -321,10 +315,7 @@ const validateTipoServicio = [
 ]
 
 const validateEmpleado = [
-  body("nombre")
-    .trim()
-    .isLength({ min: 2, max: 100 })
-    .withMessage("El nombre debe tener entre 2 y 100 caracteres"),
+  body("nombre").trim().isLength({ min: 2, max: 100 }).withMessage("El nombre debe tener entre 2 y 100 caracteres"),
   body("apellido")
     .trim()
     .isLength({ min: 2, max: 100 })
@@ -337,10 +328,7 @@ const validateEmpleado = [
 ]
 
 const validateEmpleadoUpdate = [
-  body("nombre")
-    .trim()
-    .isLength({ min: 2, max: 100 })
-    .withMessage("El nombre debe tener entre 2 y 100 caracteres"),
+  body("nombre").trim().isLength({ min: 2, max: 100 }).withMessage("El nombre debe tener entre 2 y 100 caracteres"),
   body("apellido")
     .trim()
     .isLength({ min: 2, max: 100 })
@@ -427,14 +415,18 @@ const validateMovimientoStock = [
     .isIn(["ENTRADA", "SALIDA", "AJUSTE"])
     .withMessage("Tipo de movimiento inválido (ENTRADA, SALIDA, AJUSTE)"),
   body("cantidad")
-    .custom((value) => {
+    .custom((value, { req }) => {
       const cantidadNum = Number.parseFloat(value)
-      if (isNaN(cantidadNum) || cantidadNum <= 0) {
-        throw new Error("La cantidad debe ser un número mayor a 0")
+      if (isNaN(cantidadNum) || cantidadNum < 0) {
+        throw new Error("La cantidad debe ser un número mayor o igual a 0")
+      }
+      // Para AJUSTE se permite 0, para ENTRADA y SALIDA debe ser mayor a 0
+      if ((req.body.tipo === "ENTRADA" || req.body.tipo === "SALIDA") && cantidadNum <= 0) {
+        throw new Error("La cantidad debe ser mayor a 0 para entrada/salida")
       }
       return true
     })
-    .withMessage("La cantidad debe ser un número válido mayor a 0"),
+    .withMessage("La cantidad debe ser un número válido"),
   body("motivo").optional().trim().isLength({ max: 500 }).withMessage("El motivo no puede tener más de 500 caracteres"),
   handleValidationErrors,
 ]

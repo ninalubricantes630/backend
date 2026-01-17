@@ -362,7 +362,7 @@ const serviciosController = {
           total, interes_tarjeta_porcentaje, interes_tarjeta_monto, total_con_interes_tarjeta,
           tipo_pago, tarjeta_id, numero_cuotas, usuario_id, sesion_caja_id, fecha_pago, estado, activo
         ) 
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), 'COMPLETADA', 1)`,
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), 'COMPLETADA', 1)`,
         [
           numero,
           cliente_id,
@@ -444,10 +444,6 @@ const serviciosController = {
             const stockAnterior = Number.parseFloat(productoData[0].stock)
             const stockNuevo = stockAnterior - cantidad
             const unidad_medida = productoData[0].unidad_medida
-
-            if (stockNuevo < 0) {
-              throw new Error(`Stock insuficiente para el producto: ${productoData[0].nombre}`)
-            }
 
             await connection.execute(
               `INSERT INTO detalle_servicio_productos 
