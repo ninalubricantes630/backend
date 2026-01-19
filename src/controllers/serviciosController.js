@@ -238,6 +238,14 @@ const serviciosController = {
         total_con_interes_tarjeta,
         subtotal,
         interes,
+        // Campos para pago dividido
+        pago_dividido = false,
+        monto_pago_1,
+        tipo_pago_2,
+        monto_pago_2,
+        tarjeta_id_2,
+        numero_cuotas_2,
+        tasa_interes_tarjeta_2,
       } = req.body
 
       if (!cliente_id) {
@@ -474,20 +482,57 @@ const serviciosController = {
       }
 
       if (tipo_pago_upper !== "CUENTA_CORRIENTE") {
-        await connection.execute(
-          `INSERT INTO movimientos_caja 
-           (sesion_caja_id, tipo, concepto, monto, metodo_pago, referencia_tipo, referencia_id, usuario_id, observaciones)
-           VALUES (?, 'INGRESO', ?, ?, ?, 'SERVICE', ?, ?, ?)`,
-          [
-            sesion_caja_id,
-            `Servicio #${numero} - ${tipo_pago_upper}`,
-            totalFinalCaja,
-            tipo_pago_upper,
-            servicioId,
-            usuario_id,
-            observaciones || `Servicio del cliente`,
-          ],
-        )
+        // Verificar si es pago dividido
+        if (pago_dividido && tipo_pago_2 && monto_pago_1 && monto_pago_2) {
+          // Registrar primer movimiento de caja
+          await connection.execute(
+            `INSERT INTO movimientos_caja 
+             (sesion_caja_id, tipo, concepto, monto, metodo_pago, referencia_tipo, referencia_id, usuario_id, observaciones)
+             VALUES (?, 'INGRESO', ?, ?, ?, 'SERVICE', ?, ?, ?)`,
+            [
+              sesion_caja_id,
+              `Servicio #${numero} - ${tipo_pago_upper} (Pago 1/2)`,
+              monto_pago_1,
+              tipo_pago_upper,
+              servicioId,
+              usuario_id,
+              observaciones || `Servicio del cliente - Pago dividido`,
+            ],
+          )
+
+          // Registrar segundo movimiento de caja
+          const tipo_pago_2_upper = tipo_pago_2.toUpperCase()
+          await connection.execute(
+            `INSERT INTO movimientos_caja 
+             (sesion_caja_id, tipo, concepto, monto, metodo_pago, referencia_tipo, referencia_id, usuario_id, observaciones)
+             VALUES (?, 'INGRESO', ?, ?, ?, 'SERVICE', ?, ?, ?)`,
+            [
+              sesion_caja_id,
+              `Servicio #${numero} - ${tipo_pago_2_upper} (Pago 2/2)`,
+              monto_pago_2,
+              tipo_pago_2_upper,
+              servicioId,
+              usuario_id,
+              observaciones || `Servicio del cliente - Pago dividido`,
+            ],
+          )
+        } else {
+          // Pago simple (comportamiento original)
+          await connection.execute(
+            `INSERT INTO movimientos_caja 
+             (sesion_caja_id, tipo, concepto, monto, metodo_pago, referencia_tipo, referencia_id, usuario_id, observaciones)
+             VALUES (?, 'INGRESO', ?, ?, ?, 'SERVICE', ?, ?, ?)`,
+            [
+              sesion_caja_id,
+              `Servicio #${numero} - ${tipo_pago_upper}`,
+              totalFinalCaja,
+              tipo_pago_upper,
+              servicioId,
+              usuario_id,
+              observaciones || `Servicio del cliente`,
+            ],
+          )
+        }
       }
 
       if (tipo_pago_upper === "CUENTA_CORRIENTE") {

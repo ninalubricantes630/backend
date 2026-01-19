@@ -48,6 +48,14 @@ const crearVenta = async (req, res) => {
       total_con_interes_tarjeta,
       interes_tarjeta = 0,
       tasa_interes_tarjeta,
+      // Campos para pago dividido
+      pago_dividido = false,
+      monto_pago_1,
+      tipo_pago_2,
+      monto_pago_2,
+      tarjeta_id_2,
+      numero_cuotas_2,
+      tasa_interes_tarjeta_2,
     } = req.body
     const usuario_id = req.user.id
 
@@ -453,21 +461,55 @@ const crearVenta = async (req, res) => {
         [cuentaCorriente[0].id, totalBase, saldoAnterior, saldoNuevo, `Venta ${numero}`, venta_id, usuario_id],
       )
     } else {
-      const montoACaja = totalConInteresTarjetaFinal || totalBase
+      // Verificar si es pago dividido
+      if (pago_dividido && tipo_pago_2 && monto_pago_1 && monto_pago_2) {
+        // Registrar primer movimiento de caja
+        await connection.execute(
+          `INSERT INTO movimientos_caja (
+            sesion_caja_id, 
+            tipo, 
+            concepto, 
+            monto, 
+            metodo_pago,
+            referencia_tipo, 
+            referencia_id, 
+            usuario_id
+          ) VALUES (?, 'INGRESO', ?, ?, ?, 'VENTA', ?, ?)`,
+          [sesionCaja[0].id, `Venta ${numero} - ${tipo_pago} (Pago 1/2)`, monto_pago_1, tipo_pago, venta_id, usuario_id],
+        )
 
-      await connection.execute(
-        `INSERT INTO movimientos_caja (
-          sesion_caja_id, 
-          tipo, 
-          concepto, 
-          monto, 
-          metodo_pago,
-          referencia_tipo, 
-          referencia_id, 
-          usuario_id
-        ) VALUES (?, 'INGRESO', ?, ?, ?, 'VENTA', ?, ?)`,
-        [sesionCaja[0].id, `Venta ${numero} - ${tipo_pago}`, montoACaja, tipo_pago, venta_id, usuario_id],
-      )
+        // Registrar segundo movimiento de caja
+        await connection.execute(
+          `INSERT INTO movimientos_caja (
+            sesion_caja_id, 
+            tipo, 
+            concepto, 
+            monto, 
+            metodo_pago,
+            referencia_tipo, 
+            referencia_id, 
+            usuario_id
+          ) VALUES (?, 'INGRESO', ?, ?, ?, 'VENTA', ?, ?)`,
+          [sesionCaja[0].id, `Venta ${numero} - ${tipo_pago_2} (Pago 2/2)`, monto_pago_2, tipo_pago_2, venta_id, usuario_id],
+        )
+      } else {
+        // Pago simple (comportamiento original)
+        const montoACaja = totalConInteresTarjetaFinal || totalBase
+
+        await connection.execute(
+          `INSERT INTO movimientos_caja (
+            sesion_caja_id, 
+            tipo, 
+            concepto, 
+            monto, 
+            metodo_pago,
+            referencia_tipo, 
+            referencia_id, 
+            usuario_id
+          ) VALUES (?, 'INGRESO', ?, ?, ?, 'VENTA', ?, ?)`,
+          [sesionCaja[0].id, `Venta ${numero} - ${tipo_pago}`, montoACaja, tipo_pago, venta_id, usuario_id],
+        )
+      }
     }
 
     await connection.commit()
