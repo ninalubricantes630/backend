@@ -352,18 +352,23 @@ const crearVenta = async (req, res) => {
       }
     }
 
+    // Determinar el tipo de pago para guardar en la base de datos
+    const tipoPagoFinal = pago_dividido ? 'PAGO_MULTIPLE' : tipo_pago
+    const tipoPago2Upper = tipo_pago_2 ? tipo_pago_2.toUpperCase() : null
+
     const [ventaResult] = await connection.execute(
       `INSERT INTO ventas (
         numero, sucursal_id, cliente_id, tipo_pago, tarjeta_id, numero_cuotas,
         subtotal, descuento, interes_sistema_porcentaje, interes_sistema_monto,
         total, interes_tarjeta_porcentaje, interes_tarjeta_monto, total_con_interes_tarjeta,
-        estado, observaciones, usuario_id, sesion_caja_id
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        estado, observaciones, usuario_id, sesion_caja_id,
+        pago_dividido, tipo_pago_2, monto_pago_1, monto_pago_2, tarjeta_id_2, numero_cuotas_2
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         numero,
         sucursal_id,
         cliente_id,
-        tipo_pago,
+        tipoPagoFinal,
         tarjeta_id || null,
         numero_cuotas || null,
         Number(subtotal).toFixed(2),
@@ -378,6 +383,12 @@ const crearVenta = async (req, res) => {
         observaciones,
         usuario_id,
         sesionCaja[0].id,
+        pago_dividido ? 1 : 0,
+        tipoPago2Upper,
+        pago_dividido ? Number(monto_pago_1).toFixed(2) : null,
+        pago_dividido ? Number(monto_pago_2).toFixed(2) : null,
+        tarjeta_id_2 || null,
+        numero_cuotas_2 || null,
       ],
     )
 
@@ -674,13 +685,15 @@ const obtenerVentaPorId = async (req, res) => {
               s.nombre as sucursal_nombre, 
               u.nombre as usuario_nombre,
               uc.nombre as usuario_cancelacion_nombre,
-              tc.nombre as tarjeta_nombre
+              tc.nombre as tarjeta_nombre,
+              tc2.nombre as tarjeta_nombre_2
        FROM ventas v
        LEFT JOIN clientes c ON v.cliente_id = c.id
        LEFT JOIN sucursales s ON v.sucursal_id = s.id
        LEFT JOIN usuarios u ON v.usuario_id = u.id
        LEFT JOIN usuarios uc ON v.cancelado_por = uc.id
        LEFT JOIN tarjetas_credito tc ON v.tarjeta_id = tc.id
+       LEFT JOIN tarjetas_credito tc2 ON v.tarjeta_id_2 = tc2.id
        WHERE v.id = ?`,
       [id],
     )
@@ -697,7 +710,20 @@ const obtenerVentaPorId = async (req, res) => {
       [id],
     )
 
-    return ResponseHelper.success(res, { ...venta[0], detalle })
+    // Si es pago dividido, obtener los movimientos de caja asociados para mostrar el desglose
+    let pagos = null
+    if (venta[0].pago_dividido) {
+      const [movimientosCaja] = await db.pool.execute(
+        `SELECT metodo_pago, monto, concepto 
+         FROM movimientos_caja 
+         WHERE referencia_tipo = 'VENTA' AND referencia_id = ? AND tipo = 'INGRESO' AND estado = 'ACTIVO'
+         ORDER BY id ASC`,
+        [id],
+      )
+      pagos = movimientosCaja
+    }
+
+    return ResponseHelper.success(res, { ...venta[0], detalle, pagos })
   } catch (error) {
     logger.error("Error al obtener venta:", error)
     return ResponseHelper.error(res, "Error al obtener la venta", 500)
@@ -844,30 +870,73 @@ const cancelarVenta = async (req, res) => {
     }
 
     if (venta[0].tipo_pago !== "CUENTA_CORRIENTE") {
-      const montoARevertir = venta[0].total_con_interes_tarjeta || venta[0].total
+      // Si es pago múltiple, obtener los movimientos originales y crear egresos correspondientes
+      if (venta[0].pago_dividido) {
+        const [movimientosOriginales] = await connection.execute(
+          `SELECT id, metodo_pago, monto 
+           FROM movimientos_caja 
+           WHERE referencia_tipo = 'VENTA' AND referencia_id = ? AND tipo = 'INGRESO' AND estado = 'ACTIVO'`,
+          [id],
+        )
 
-      await connection.execute(
-        `INSERT INTO movimientos_caja (
-          sesion_caja_id, 
-          tipo, 
-          concepto, 
-          monto,
-          metodo_pago, 
-          referencia_tipo, 
-          referencia_id, 
-          usuario_id,
-          observaciones
-        ) VALUES (?, 'EGRESO', ?, ?, ?, 'VENTA_CANCELADA', ?, ?, ?)`,
-        [
-          venta[0].sesion_caja_id,
-          `Cancelación venta ${venta[0].numero}`,
-          montoARevertir,
-          venta[0].tipo_pago, // Usa el mismo método de pago de la venta original
-          id,
-          usuario_id,
-          motivo || "Venta cancelada",
-        ],
-      )
+        for (const mov of movimientosOriginales) {
+          // Crear un egreso por cada movimiento de ingreso original
+          await connection.execute(
+            `INSERT INTO movimientos_caja (
+              sesion_caja_id, 
+              tipo, 
+              concepto, 
+              monto,
+              metodo_pago, 
+              referencia_tipo, 
+              referencia_id, 
+              usuario_id,
+              observaciones
+            ) VALUES (?, 'EGRESO', ?, ?, ?, 'VENTA_CANCELADA', ?, ?, ?)`,
+            [
+              venta[0].sesion_caja_id,
+              `Cancelación venta ${venta[0].numero} - ${mov.metodo_pago}`,
+              mov.monto,
+              mov.metodo_pago,
+              id,
+              usuario_id,
+              motivo || "Venta cancelada",
+            ],
+          )
+
+          // Marcar el movimiento original como anulado
+          await connection.execute(
+            `UPDATE movimientos_caja SET estado = 'ANULADO' WHERE id = ?`,
+            [mov.id],
+          )
+        }
+      } else {
+        // Pago simple - comportamiento original
+        const montoARevertir = venta[0].total_con_interes_tarjeta || venta[0].total
+
+        await connection.execute(
+          `INSERT INTO movimientos_caja (
+            sesion_caja_id, 
+            tipo, 
+            concepto, 
+            monto,
+            metodo_pago, 
+            referencia_tipo, 
+            referencia_id, 
+            usuario_id,
+            observaciones
+          ) VALUES (?, 'EGRESO', ?, ?, ?, 'VENTA_CANCELADA', ?, ?, ?)`,
+          [
+            venta[0].sesion_caja_id,
+            `Cancelación venta ${venta[0].numero}`,
+            montoARevertir,
+            venta[0].tipo_pago,
+            id,
+            usuario_id,
+            motivo || "Venta cancelada",
+          ],
+        )
+      }
     }
 
     await connection.commit()

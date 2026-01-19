@@ -154,13 +154,15 @@ const serviciosController = {
                v.patente, v.marca, v.modelo, v.año,
                suc.nombre as sucursal_nombre, suc.ubicacion as sucursal_ubicacion,
                u.nombre as usuario_nombre,
-               tc.nombre as tarjeta_nombre
+               tc.nombre as tarjeta_nombre,
+               tc2.nombre as tarjeta_nombre_2
         FROM servicios s
         LEFT JOIN clientes c ON s.cliente_id = c.id
         LEFT JOIN vehiculos v ON s.vehiculo_id = v.id
         LEFT JOIN sucursales suc ON s.sucursal_id = suc.id
         LEFT JOIN usuarios u ON s.usuario_id = u.id
         LEFT JOIN tarjetas_credito tc ON s.tarjeta_id = tc.id
+        LEFT JOIN tarjetas_credito tc2 ON s.tarjeta_id_2 = tc2.id
         WHERE s.id = ? AND s.activo = true`,
         [id],
       )
@@ -200,10 +202,24 @@ const serviciosController = {
         item.productos = productos
       }
 
+      // Si es pago dividido, obtener los movimientos de caja asociados para mostrar el desglose
+      let pagos = null
+      if (servicios[0].pago_dividido) {
+        const [movimientosCaja] = await db.pool.execute(
+          `SELECT metodo_pago, monto, concepto 
+           FROM movimientos_caja 
+           WHERE referencia_tipo = 'SERVICE' AND referencia_id = ? AND tipo = 'INGRESO' AND estado = 'ACTIVO'
+           ORDER BY id ASC`,
+          [id],
+        )
+        pagos = movimientosCaja
+      }
+
       const servicio = {
         ...servicios[0],
         empleados,
         items,
+        pagos,
       }
 
       res.json(servicio)
@@ -363,20 +379,25 @@ const serviciosController = {
         totalFinalCaja = totalConInteresTarjetaFinal
       }
 
+      // Determinar el tipo de pago para guardar en la base de datos
+      const tipoPagoFinal = pago_dividido ? 'PAGO_MULTIPLE' : tipo_pago_upper
+      const tipoPago2Upper = tipo_pago_2 ? tipo_pago_2.toUpperCase() : null
+
       const [result] = await connection.execute(
         `INSERT INTO servicios (
           numero, cliente_id, vehiculo_id, sucursal_id, descripcion, observaciones,
           subtotal, descuento, interes_sistema_porcentaje, interes_sistema_monto,
           total, interes_tarjeta_porcentaje, interes_tarjeta_monto, total_con_interes_tarjeta,
-          tipo_pago, tarjeta_id, numero_cuotas, usuario_id, sesion_caja_id, fecha_pago, estado, activo
+          tipo_pago, tarjeta_id, numero_cuotas, usuario_id, sesion_caja_id, fecha_pago, estado, activo,
+          pago_dividido, tipo_pago_2, monto_pago_1, monto_pago_2, tarjeta_id_2, numero_cuotas_2
         ) 
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), 'COMPLETADA', 1)`,
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), 'COMPLETADA', 1, ?, ?, ?, ?, ?, ?)`,
         [
           numero,
           cliente_id,
           vehiculo_id,
           sucursal_id,
-          req.body.descripcion || "", // agregado campo descripcion faltante
+          req.body.descripcion || "",
           observaciones || null,
           Number(finalSubtotal).toFixed(2),
           Number(descuentoNum).toFixed(2),
@@ -386,11 +407,17 @@ const serviciosController = {
           Number(interesTarjetaPorcentaje).toFixed(2),
           Number(interesTarjetaMonto).toFixed(2),
           totalConInteresTarjetaFinal ? Number(totalConInteresTarjetaFinal).toFixed(2) : null,
-          tipo_pago_upper,
+          tipoPagoFinal,
           tarjeta_id || null,
           numero_cuotas || 1,
           usuario_id,
-          sesion_caja_id || null, // Agregado sesion_caja_id como placeholder
+          sesion_caja_id,
+          pago_dividido ? 1 : 0,
+          tipoPago2Upper,
+          pago_dividido ? Number(monto_pago_1).toFixed(2) : null,
+          pago_dividido ? Number(monto_pago_2).toFixed(2) : null,
+          tarjeta_id_2 || null,
+          numero_cuotas_2 || null,
         ],
       )
 
@@ -924,25 +951,60 @@ const serviciosController = {
       }
 
       if (servicio[0].tipo_pago !== "CUENTA_CORRIENTE") {
-        const montoDevolucion =
-          servicio[0].total_con_interes_tarjeta && servicio[0].total_con_interes_tarjeta !== servicio[0].total
-            ? servicio[0].total_con_interes_tarjeta
-            : servicio[0].total
+        // Si es pago múltiple, obtener los movimientos originales y crear egresos correspondientes
+        if (servicio[0].pago_dividido) {
+          const [movimientosOriginales] = await connection.execute(
+            `SELECT id, metodo_pago, monto 
+             FROM movimientos_caja 
+             WHERE referencia_tipo = 'SERVICE' AND referencia_id = ? AND tipo = 'INGRESO' AND estado = 'ACTIVO'`,
+            [id],
+          )
 
-        await connection.execute(
-          `INSERT INTO movimientos_caja 
-           (sesion_caja_id, tipo, concepto, monto, metodo_pago, referencia_tipo, referencia_id, usuario_id, observaciones)
-           VALUES (?, 'EGRESO', ?, ?, ?, 'SERVICIO_CANCELADO', ?, ?, ?)`,
-          [
-            servicio[0].sesion_caja_id,
-            `Cancelación Servicio ${servicio[0].numero}`,
-            montoDevolucion,
-            servicio[0].tipo_pago,
-            id,
-            usuario_id,
-            motivo || "Servicio cancelado",
-          ],
-        )
+          for (const mov of movimientosOriginales) {
+            // Crear un egreso por cada movimiento de ingreso original
+            await connection.execute(
+              `INSERT INTO movimientos_caja 
+               (sesion_caja_id, tipo, concepto, monto, metodo_pago, referencia_tipo, referencia_id, usuario_id, observaciones)
+               VALUES (?, 'EGRESO', ?, ?, ?, 'SERVICIO_CANCELADO', ?, ?, ?)`,
+              [
+                servicio[0].sesion_caja_id,
+                `Cancelación Servicio ${servicio[0].numero} - ${mov.metodo_pago}`,
+                mov.monto,
+                mov.metodo_pago,
+                id,
+                usuario_id,
+                motivo || "Servicio cancelado",
+              ],
+            )
+
+            // Marcar el movimiento original como anulado
+            await connection.execute(
+              `UPDATE movimientos_caja SET estado = 'ANULADO' WHERE id = ?`,
+              [mov.id],
+            )
+          }
+        } else {
+          // Pago simple - comportamiento original
+          const montoDevolucion =
+            servicio[0].total_con_interes_tarjeta && servicio[0].total_con_interes_tarjeta !== servicio[0].total
+              ? servicio[0].total_con_interes_tarjeta
+              : servicio[0].total
+
+          await connection.execute(
+            `INSERT INTO movimientos_caja 
+             (sesion_caja_id, tipo, concepto, monto, metodo_pago, referencia_tipo, referencia_id, usuario_id, observaciones)
+             VALUES (?, 'EGRESO', ?, ?, ?, 'SERVICIO_CANCELADO', ?, ?, ?)`,
+            [
+              servicio[0].sesion_caja_id,
+              `Cancelación Servicio ${servicio[0].numero}`,
+              montoDevolucion,
+              servicio[0].tipo_pago,
+              id,
+              usuario_id,
+              motivo || "Servicio cancelado",
+            ],
+          )
+        }
       }
 
       if (servicio[0].tipo_pago === "CUENTA_CORRIENTE") {

@@ -516,8 +516,6 @@ const obtenerDetalleIngresos = async (req, res) => {
       [sesionId],
     )
 
-    console.log("[v0] Backend - obtenerDetalleIngresos raw query result:", ingresos)
-
     // Calcular total
     const totalIngresos = ingresos.reduce((sum, item) => sum + (Number.parseFloat(item.total) || 0), 0)
 
@@ -533,11 +531,8 @@ const obtenerDetalleIngresos = async (req, res) => {
       desglose: desglose,
     }
 
-    console.log("[v0] Backend - obtenerDetalleIngresos final result:", resultado)
-
     return ResponseHelper.success(res, resultado)
   } catch (error) {
-    console.error("[v0] Backend - Error al obtener detalle de ingresos:", error)
     logger.error("Error al obtener detalle de ingresos:", error)
     return ResponseHelper.error(res, "Error al obtener detalle de ingresos", 500)
   }
