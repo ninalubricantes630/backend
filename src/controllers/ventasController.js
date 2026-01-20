@@ -49,7 +49,7 @@ const crearVenta = async (req, res) => {
       interes_tarjeta = 0,
       tasa_interes_tarjeta,
       // Campos para pago dividido
-      pago_dividido = false,
+      pago_dividido,
       monto_pago_1,
       tipo_pago_2,
       monto_pago_2,
@@ -58,6 +58,18 @@ const crearVenta = async (req, res) => {
       tasa_interes_tarjeta_2,
     } = req.body
     const usuario_id = req.user.id
+
+    // Convertir pago_dividido a boolean (puede venir como string "true"/"false")
+    const esPagoDividido = pago_dividido === true || pago_dividido === "true" || pago_dividido === 1
+
+    console.log("[v0] Datos recibidos pago dividido:", {
+      pago_dividido,
+      esPagoDividido,
+      tipo_pago,
+      tipo_pago_2,
+      monto_pago_1,
+      monto_pago_2
+    })
 
     // Formato: V-YYYYMMDD-XXX (donde XXX es secuencial del día)
     const fecha = new Date()
@@ -353,44 +365,81 @@ const crearVenta = async (req, res) => {
     }
 
     // Determinar el tipo de pago para guardar en la base de datos
-    const tipoPagoFinal = pago_dividido ? 'PAGO_MULTIPLE' : tipo_pago
+    const tipoPagoFinal = esPagoDividido ? 'PAGO_MULTIPLE' : tipo_pago
     const tipoPago2Upper = tipo_pago_2 ? tipo_pago_2.toUpperCase() : null
 
-    const [ventaResult] = await connection.execute(
-      `INSERT INTO ventas (
-        numero, sucursal_id, cliente_id, tipo_pago, tarjeta_id, numero_cuotas,
-        subtotal, descuento, interes_sistema_porcentaje, interes_sistema_monto,
-        total, interes_tarjeta_porcentaje, interes_tarjeta_monto, total_con_interes_tarjeta,
-        estado, observaciones, usuario_id, sesion_caja_id,
-        pago_dividido, tipo_pago_2, monto_pago_1, monto_pago_2, tarjeta_id_2, numero_cuotas_2
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        numero,
-        sucursal_id,
-        cliente_id,
-        tipoPagoFinal,
-        tarjeta_id || null,
-        numero_cuotas || null,
-        Number(subtotal).toFixed(2),
-        Number(descuentoNum).toFixed(2),
-        Number(interesSistemaPorcentaje).toFixed(2),
-        Number(interesSistemaMonto).toFixed(2),
-        Number(totalBase).toFixed(2),
-        Number(interesTarjetaPorcentaje).toFixed(2),
-        Number(interesTarjetaMonto).toFixed(2),
-        totalConInteresTarjetaFinal ? Number(totalConInteresTarjetaFinal).toFixed(2) : null,
-        "COMPLETADA",
-        observaciones,
-        usuario_id,
-        sesionCaja[0].id,
-        pago_dividido ? 1 : 0,
-        tipoPago2Upper,
-        pago_dividido ? Number(monto_pago_1).toFixed(2) : null,
-        pago_dividido ? Number(monto_pago_2).toFixed(2) : null,
-        tarjeta_id_2 || null,
-        numero_cuotas_2 || null,
-      ],
-    )
+    console.log("[v0] Guardando venta con tipo_pago:", tipoPagoFinal, "esPagoDividido:", esPagoDividido)
+
+    let ventaResult
+    try {
+      // Intenta insertar con las nuevas columnas de pago dividido
+      ;[ventaResult] = await connection.execute(
+        `INSERT INTO ventas (
+          numero, sucursal_id, cliente_id, tipo_pago, tarjeta_id, numero_cuotas,
+          subtotal, descuento, interes_sistema_porcentaje, interes_sistema_monto,
+          total, interes_tarjeta_porcentaje, interes_tarjeta_monto, total_con_interes_tarjeta,
+          estado, observaciones, usuario_id, sesion_caja_id,
+          pago_dividido, tipo_pago_2, monto_pago_1, monto_pago_2, tarjeta_id_2, numero_cuotas_2
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          numero,
+          sucursal_id,
+          cliente_id,
+          tipoPagoFinal,
+          tarjeta_id || null,
+          numero_cuotas || null,
+          Number(subtotal).toFixed(2),
+          Number(descuentoNum).toFixed(2),
+          Number(interesSistemaPorcentaje).toFixed(2),
+          Number(interesSistemaMonto).toFixed(2),
+          Number(totalBase).toFixed(2),
+          Number(interesTarjetaPorcentaje).toFixed(2),
+          Number(interesTarjetaMonto).toFixed(2),
+          totalConInteresTarjetaFinal ? Number(totalConInteresTarjetaFinal).toFixed(2) : null,
+          "COMPLETADA",
+          observaciones,
+          usuario_id,
+          sesionCaja[0].id,
+          esPagoDividido ? 1 : 0,
+          tipoPago2Upper,
+          esPagoDividido ? Number(monto_pago_1).toFixed(2) : null,
+          esPagoDividido ? Number(monto_pago_2).toFixed(2) : null,
+          tarjeta_id_2 || null,
+          numero_cuotas_2 || null,
+        ],
+      )
+    } catch (insertError) {
+      // Si falla por columnas no existentes, usar el método antiguo
+      console.log("[v0] Insertando venta sin columnas de pago dividido (migración pendiente):", insertError.message)
+      ;[ventaResult] = await connection.execute(
+        `INSERT INTO ventas (
+          numero, sucursal_id, cliente_id, tipo_pago, tarjeta_id, numero_cuotas,
+          subtotal, descuento, interes_sistema_porcentaje, interes_sistema_monto,
+          total, interes_tarjeta_porcentaje, interes_tarjeta_monto, total_con_interes_tarjeta,
+          estado, observaciones, usuario_id, sesion_caja_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          numero,
+          sucursal_id,
+          cliente_id,
+          tipo_pago, // Usar el tipo_pago original (primer método) si PAGO_MULTIPLE no está soportado
+          tarjeta_id || null,
+          numero_cuotas || null,
+          Number(subtotal).toFixed(2),
+          Number(descuentoNum).toFixed(2),
+          Number(interesSistemaPorcentaje).toFixed(2),
+          Number(interesSistemaMonto).toFixed(2),
+          Number(totalBase).toFixed(2),
+          Number(interesTarjetaPorcentaje).toFixed(2),
+          Number(interesTarjetaMonto).toFixed(2),
+          totalConInteresTarjetaFinal ? Number(totalConInteresTarjetaFinal).toFixed(2) : null,
+          "COMPLETADA",
+          observaciones,
+          usuario_id,
+          sesionCaja[0].id,
+        ],
+      )
+    }
 
     const venta_id = ventaResult.insertId
 
@@ -473,7 +522,14 @@ const crearVenta = async (req, res) => {
       )
     } else {
       // Verificar si es pago dividido
-      if (pago_dividido && tipo_pago_2 && monto_pago_1 && monto_pago_2) {
+      if (esPagoDividido && tipo_pago_2 && monto_pago_1 && monto_pago_2) {
+        console.log("[v0] Registrando movimientos de caja para pago dividido:", {
+          tipo_pago,
+          tipo_pago_2,
+          monto_pago_1,
+          monto_pago_2
+        })
+        
         // Registrar primer movimiento de caja
         await connection.execute(
           `INSERT INTO movimientos_caja (

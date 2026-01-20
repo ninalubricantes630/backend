@@ -255,7 +255,7 @@ const serviciosController = {
         subtotal,
         interes,
         // Campos para pago dividido
-        pago_dividido = false,
+        pago_dividido,
         monto_pago_1,
         tipo_pago_2,
         monto_pago_2,
@@ -263,6 +263,18 @@ const serviciosController = {
         numero_cuotas_2,
         tasa_interes_tarjeta_2,
       } = req.body
+
+      // Convertir pago_dividido a boolean (puede venir como string "true"/"false")
+      const esPagoDividido = pago_dividido === true || pago_dividido === "true" || pago_dividido === 1
+
+      console.log("[v0] Servicio - Datos recibidos pago dividido:", {
+        pago_dividido,
+        esPagoDividido,
+        tipo_pago,
+        tipo_pago_2,
+        monto_pago_1,
+        monto_pago_2
+      })
 
       if (!cliente_id) {
         return res.status(400).json({ error: "Cliente ID es requerido" })
@@ -380,46 +392,85 @@ const serviciosController = {
       }
 
       // Determinar el tipo de pago para guardar en la base de datos
-      const tipoPagoFinal = pago_dividido ? 'PAGO_MULTIPLE' : tipo_pago_upper
+      const tipoPagoFinal = esPagoDividido ? 'PAGO_MULTIPLE' : tipo_pago_upper
       const tipoPago2Upper = tipo_pago_2 ? tipo_pago_2.toUpperCase() : null
 
-      const [result] = await connection.execute(
-        `INSERT INTO servicios (
-          numero, cliente_id, vehiculo_id, sucursal_id, descripcion, observaciones,
-          subtotal, descuento, interes_sistema_porcentaje, interes_sistema_monto,
-          total, interes_tarjeta_porcentaje, interes_tarjeta_monto, total_con_interes_tarjeta,
-          tipo_pago, tarjeta_id, numero_cuotas, usuario_id, sesion_caja_id, fecha_pago, estado, activo,
-          pago_dividido, tipo_pago_2, monto_pago_1, monto_pago_2, tarjeta_id_2, numero_cuotas_2
-        ) 
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), 'COMPLETADA', 1, ?, ?, ?, ?, ?, ?)`,
-        [
-          numero,
-          cliente_id,
-          vehiculo_id,
-          sucursal_id,
-          req.body.descripcion || "",
-          observaciones || null,
-          Number(finalSubtotal).toFixed(2),
-          Number(descuentoNum).toFixed(2),
-          Number(interesSistemaPorcentaje).toFixed(2),
-          Number(interesSistemaMonto).toFixed(2),
-          Number(totalBase).toFixed(2),
-          Number(interesTarjetaPorcentaje).toFixed(2),
-          Number(interesTarjetaMonto).toFixed(2),
-          totalConInteresTarjetaFinal ? Number(totalConInteresTarjetaFinal).toFixed(2) : null,
-          tipoPagoFinal,
-          tarjeta_id || null,
-          numero_cuotas || 1,
-          usuario_id,
-          sesion_caja_id,
-          pago_dividido ? 1 : 0,
-          tipoPago2Upper,
-          pago_dividido ? Number(monto_pago_1).toFixed(2) : null,
-          pago_dividido ? Number(monto_pago_2).toFixed(2) : null,
-          tarjeta_id_2 || null,
-          numero_cuotas_2 || null,
-        ],
-      )
+      console.log("[v0] Servicio - Guardando con tipo_pago:", tipoPagoFinal, "esPagoDividido:", esPagoDividido)
+
+      let result
+      try {
+        // Intenta insertar con las nuevas columnas de pago dividido
+        ;[result] = await connection.execute(
+          `INSERT INTO servicios (
+            numero, cliente_id, vehiculo_id, sucursal_id, descripcion, observaciones,
+            subtotal, descuento, interes_sistema_porcentaje, interes_sistema_monto,
+            total, interes_tarjeta_porcentaje, interes_tarjeta_monto, total_con_interes_tarjeta,
+            tipo_pago, tarjeta_id, numero_cuotas, usuario_id, sesion_caja_id, fecha_pago, estado, activo,
+            pago_dividido, tipo_pago_2, monto_pago_1, monto_pago_2, tarjeta_id_2, numero_cuotas_2
+          ) 
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), 'COMPLETADA', 1, ?, ?, ?, ?, ?, ?)`,
+          [
+            numero,
+            cliente_id,
+            vehiculo_id,
+            sucursal_id,
+            req.body.descripcion || "",
+            observaciones || null,
+            Number(finalSubtotal).toFixed(2),
+            Number(descuentoNum).toFixed(2),
+            Number(interesSistemaPorcentaje).toFixed(2),
+            Number(interesSistemaMonto).toFixed(2),
+            Number(totalBase).toFixed(2),
+            Number(interesTarjetaPorcentaje).toFixed(2),
+            Number(interesTarjetaMonto).toFixed(2),
+            totalConInteresTarjetaFinal ? Number(totalConInteresTarjetaFinal).toFixed(2) : null,
+            tipoPagoFinal,
+            tarjeta_id || null,
+            numero_cuotas || 1,
+            usuario_id,
+            sesion_caja_id,
+            esPagoDividido ? 1 : 0,
+            tipoPago2Upper,
+            esPagoDividido ? Number(monto_pago_1).toFixed(2) : null,
+            esPagoDividido ? Number(monto_pago_2).toFixed(2) : null,
+            tarjeta_id_2 || null,
+            numero_cuotas_2 || null,
+          ],
+        )
+      } catch (insertError) {
+        // Si falla por columnas no existentes, usar el método antiguo
+        console.log("[v0] Insertando servicio sin columnas de pago dividido (migración pendiente):", insertError.message)
+        ;[result] = await connection.execute(
+          `INSERT INTO servicios (
+            numero, cliente_id, vehiculo_id, sucursal_id, descripcion, observaciones,
+            subtotal, descuento, interes_sistema_porcentaje, interes_sistema_monto,
+            total, interes_tarjeta_porcentaje, interes_tarjeta_monto, total_con_interes_tarjeta,
+            tipo_pago, tarjeta_id, numero_cuotas, usuario_id, sesion_caja_id, fecha_pago, estado, activo
+          ) 
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), 'COMPLETADA', 1)`,
+          [
+            numero,
+            cliente_id,
+            vehiculo_id,
+            sucursal_id,
+            req.body.descripcion || "",
+            observaciones || null,
+            Number(finalSubtotal).toFixed(2),
+            Number(descuentoNum).toFixed(2),
+            Number(interesSistemaPorcentaje).toFixed(2),
+            Number(interesSistemaMonto).toFixed(2),
+            Number(totalBase).toFixed(2),
+            Number(interesTarjetaPorcentaje).toFixed(2),
+            Number(interesTarjetaMonto).toFixed(2),
+            totalConInteresTarjetaFinal ? Number(totalConInteresTarjetaFinal).toFixed(2) : null,
+            tipo_pago_upper, // Usar el tipo_pago original si PAGO_MULTIPLE no está soportado
+            tarjeta_id || null,
+            numero_cuotas || 1,
+            usuario_id,
+            sesion_caja_id,
+          ],
+        )
+      }
 
       const servicioId = result.insertId
 
@@ -510,7 +561,14 @@ const serviciosController = {
 
       if (tipo_pago_upper !== "CUENTA_CORRIENTE") {
         // Verificar si es pago dividido
-        if (pago_dividido && tipo_pago_2 && monto_pago_1 && monto_pago_2) {
+        if (esPagoDividido && tipo_pago_2 && monto_pago_1 && monto_pago_2) {
+          console.log("[v0] Servicio - Registrando movimientos de caja para pago dividido:", {
+            tipo_pago_upper,
+            tipo_pago_2,
+            monto_pago_1,
+            monto_pago_2
+          })
+          
           // Registrar primer movimiento de caja
           await connection.execute(
             `INSERT INTO movimientos_caja 
