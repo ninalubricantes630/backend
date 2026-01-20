@@ -146,7 +146,8 @@ const cerrarCaja = async (req, res) => {
     const [movimientos] = await connection.execute(
       `SELECT 
         SUM(CASE WHEN tipo = 'INGRESO' AND concepto != 'Apertura de caja' THEN monto ELSE 0 END) as total_ingresos,
-        SUM(CASE WHEN tipo = 'EGRESO' THEN monto ELSE 0 END) as total_egresos
+        SUM(CASE WHEN tipo = 'EGRESO' THEN monto ELSE 0 END) as total_egresos,
+        SUM(CASE WHEN tipo = 'INGRESO' AND concepto != 'Apertura de caja' AND metodo_pago = 'EFECTIVO' THEN monto ELSE 0 END) as total_ingresos_efectivo
       FROM movimientos_caja 
       WHERE sesion_caja_id = ? AND estado = 'ACTIVO'`,
       [sesionId],
@@ -154,10 +155,16 @@ const cerrarCaja = async (req, res) => {
 
     const totalIngresos = Number.parseFloat(movimientos[0].total_ingresos) || 0
     const totalEgresos = Number.parseFloat(movimientos[0].total_egresos) || 0
+    const totalIngresosEfectivo = Number.parseFloat(movimientos[0].total_ingresos_efectivo) || 0
 
-    const montoEsperado = montoInicial + totalIngresos - totalEgresos
+    // Saldo esperado total (sistema completo)
+    const montoEsperadoSistema = montoInicial + totalIngresos - totalEgresos
+    
+    // Saldo esperado en caja (solo efectivo)
+    const montoEsperadoCaja = montoInicial + totalIngresosEfectivo - totalEgresos
+    
     const montoFinalNum = Number.parseFloat(montoFinal)
-    const diferencia = montoFinalNum - montoEsperado
+    const diferencia = montoFinalNum - montoEsperadoCaja
 
     const [ingresosDesglose] = await connection.execute(
       `SELECT 
@@ -187,11 +194,14 @@ const cerrarCaja = async (req, res) => {
 
     const observacionesValue = observaciones || null
 
+    const montoEsperado = montoEsperadoSistema; // Declare the variable here
+
     await connection.execute(
       `UPDATE sesiones_caja 
       SET usuario_cierre_id = ?, 
           monto_final = ?, 
           monto_esperado_sistema = ?,
+          monto_esperado_caja = ?,
           total_ingresos = ?,
           total_egresos = ?,
           diferencia = ?,
@@ -203,7 +213,8 @@ const cerrarCaja = async (req, res) => {
       [
         usuarioId,
         montoFinalNum,
-        montoEsperado,
+        montoEsperadoSistema,
+        montoEsperadoCaja,
         totalIngresos,
         totalEgresos,
         diferencia,
