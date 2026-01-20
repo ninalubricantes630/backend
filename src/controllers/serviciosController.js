@@ -1035,9 +1035,9 @@ const serviciosController = {
               ],
             )
 
-            // Marcar el movimiento original como anulado
+            // Marcar el movimiento original como cancelado
             await connection.execute(
-              `UPDATE movimientos_caja SET estado = 'ANULADO' WHERE id = ?`,
+              `UPDATE movimientos_caja SET estado = 'CANCELADO' WHERE id = ?`,
               [mov.id],
             )
           }
