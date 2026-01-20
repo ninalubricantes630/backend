@@ -294,14 +294,14 @@ const serviciosController = {
 
       const tipo_pago_upper = tipo_pago.toUpperCase().trim()
 
-      const tiposPagoValidos = ["EFECTIVO", "TARJETA_CREDITO", "TRANSFERENCIA", "CUENTA_CORRIENTE"]
-      if (!tiposPagoValidos.includes(tipo_pago_upper)) {
-        await connection.rollback()
-        connection.release()
-        return res
-          .status(400)
-          .json({ error: `Tipo de pago inválido. Valores permitidos: ${tiposPagoValidos.join(", ")}` })
-      }
+  const tiposPagoValidos = ["EFECTIVO", "TARJETA_CREDITO", "TRANSFERENCIA", "CUENTA_CORRIENTE", "PAGO_MULTIPLE"]
+  if (!tiposPagoValidos.includes(tipo_pago_upper)) {
+    await connection.rollback()
+    connection.release()
+    return res
+      .status(400)
+      .json({ error: `Tipo de pago inválido. Valores permitidos: ${tiposPagoValidos.join(", ")}` })
+  }
 
       const usuario_id = req.user?.id || null
 

@@ -113,7 +113,7 @@ const crearVenta = async (req, res) => {
       return ResponseHelper.validationError(res, "El tipo de pago es requerido y no puede estar vacío")
     }
 
-    const tiposPagoValidos = ["EFECTIVO", "TARJETA_CREDITO", "TRANSFERENCIA", "CUENTA_CORRIENTE"]
+    const tiposPagoValidos = ["EFECTIVO", "TARJETA_CREDITO", "TRANSFERENCIA", "CUENTA_CORRIENTE", "PAGO_MULTIPLE"]
     if (!tiposPagoValidos.includes(tipo_pago)) {
       await connection.rollback()
       connection.release()
