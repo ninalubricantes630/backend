@@ -31,7 +31,8 @@ const clientesController = {
             serv.id, '|', serv.numero, '|', serv.descripcion, '|', 
             DATE_FORMAT(serv.created_at, '%Y-%m-%d'), '|', 
             COALESCE(serv.precio_referencia, ''), '|', v2.patente, '|',
-            COALESCE(serv.observaciones, ''), '|', serv.created_at
+            COALESCE(serv.observaciones, ''), '|', serv.created_at, '|',
+            COALESCE(serv.vehiculo_id, ''), '|', COALESCE(serv.notas, '')
           ) ORDER BY serv.created_at DESC SEPARATOR ';;') as servicios_data
         FROM clientes c
         LEFT JOIN sucursales s ON c.sucursal_id = s.id
@@ -146,17 +147,19 @@ const clientesController = {
         // Parse services data
         if (cliente.servicios_data) {
           clienteData.servicios = cliente.servicios_data.split(";;").map((servicioStr) => {
-            const [id, numero, descripcion, fecha, precio, vehiculoPatente, observaciones, created_at] =
+            const [id, numero, descripcion, fecha, precio, vehiculoPatente, observaciones, created_at, vehiculo_id, notas] =
               servicioStr.split("|")
             return {
               id: Number.parseInt(id),
               numero,
               descripcion,
               fecha,
-              precio: precio ? Number.parseFloat(precio) : null,
+              precio_referencia: precio ? Number.parseFloat(precio) : null,
               vehiculo: vehiculoPatente,
               observaciones: observaciones || null,
               created_at: created_at || null,
+              vehiculo_id: vehiculo_id ? Number.parseInt(vehiculo_id) : null,
+              notas: notas || null,
               items_count: 1,
             }
           })
