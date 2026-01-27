@@ -7,6 +7,8 @@ const clientesController = {
     try {
       let { page = 1, limit = 10, search = "", searchBy = "", sucursal_id = "", sucursales_ids = "" } = req.query
 
+      console.log("[v0] getClientes params:", { page, limit, search, searchBy, sucursal_id, sucursales_ids })
+
       page = Number.parseInt(page, 10) || 1
       limit = Number.parseInt(limit, 10) || 10
       page = page < 1 ? 1 : page
@@ -105,9 +107,15 @@ const clientesController = {
 
       query += ` GROUP BY c.id ORDER BY c.nombre ASC, c.apellido ASC LIMIT ${limit} OFFSET ${offset}`
 
+      console.log("[v0] Final query:", query)
+      console.log("[v0] Query params:", queryParams)
+
       const [clientesRaw] = await db.pool.execute(query, queryParams)
       const [countResult] = await db.pool.execute(countQuery, countParams)
       const total = countResult[0].total
+
+      console.log("[v0] clientesRaw found:", clientesRaw.length)
+      console.log("[v0] Total count:", total)
 
       const clientes = clientesRaw.map((cliente) => {
         const clienteData = {
