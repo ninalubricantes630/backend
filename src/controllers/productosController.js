@@ -1,997 +1,813 @@
-import { executeQuery, executeTransaction } from "../config/database.js"
-import { cost } from "../config/constants.js" // Declare the cost variable
+const db = require("../config/database")
+const ResponseHelper = require("../utils/responseHelper")
+const logger = require("../config/logger")
+const importHelper = require("../utils/importHelper")
+const XLSX = require("xlsx")
 
-// NUEVO: Obtener los 10 productos más vendidos para la interfaz de ventas
-export const getTopSellingProducts = async (req, res) => {
-  try {
-    const limit = Number.parseInt(req.query.limit, 10) || 10
+const productosController = {
+  // Obtener todos los productos con filtros y paginación
+  getProductos: async (req, res) => {
+    try {
+      const {
+        search,
+        categoria_id,
+        unidad_medida,
+        precio_min,
+        precio_max,
+        sucursal_id,
+        sucursales_ids,
+        page = 1,
+        limit = 10,
+        offset: offsetParam = 0,
+      } = req.query
 
-    const query = `
-      SELECT 
-        p.id,
-        p.name,
-        p.description,
-        p.price_list,
-        p.price_cash,
-        p.cost,
-        p.stock,
-        p.min_stock,
-        p.category_id,
-        p.barcode,
-        p.image,
-        p.color,
-        p.size,
-        p.active,
-        p.created_at,
-        p.updated_at,
-        c.name as category_name,
-        c.color as category_color,
-        c.icon as category_icon,
-        COALESCE(SUM(si.quantity), 0) as total_sold,
-        COUNT(DISTINCT s.id) as sales_count
-      FROM products p
-      LEFT JOIN categories c ON p.category_id = c.id
-      LEFT JOIN sale_items si ON p.id = si.product_id
-      LEFT JOIN sales s ON si.sale_id = s.id AND s.status = 'completed'
-      WHERE p.active = TRUE
-      GROUP BY p.id, p.name, p.description, p.price_list, p.price_cash, p.cost, p.stock, 
-               p.min_stock, p.category_id, p.barcode, p.image, p.color, p.size,
-               p.active, p.created_at, p.updated_at, c.name, c.color, c.icon
-      ORDER BY total_sold DESC, sales_count DESC, p.name ASC
-      LIMIT ${limit}
-    `
-
-    const rows = await executeQuery(query)
-
-    return res.json({
-      success: true,
-      data: {
-        products: rows,
-      },
-    })
-  } catch (error) {
-    console.error("Error al obtener productos más vendidos:", error)
-    return res.status(500).json({
-      success: false,
-      message: "Error al obtener productos más vendidos",
-    })
-  }
-}
-
-// Obtener todos los productos con paginación optimizada
-export const getProducts = async (req, res) => {
-  try {
-    const {
-      category,
-      active = "true",
-      search,
-      stockLevel,
-      minPrice,
-      maxPrice,
-      minStock,
-      maxStock,
-      page = 1,
-      limit = 25,
-    } = req.query
-
-    let sql = `
-      SELECT 
-        p.id,
-        p.name,
-        p.description,
-        p.price_list,
-        p.price_cash,
-        p.cost,
-        p.stock,
-        p.min_stock,
-        p.category_id,
-        p.barcode,
-        p.image,
-        p.color,
-        p.size,
-        p.active,
-        p.created_at,
-        p.updated_at,
-        c.name as category_name,
-        c.color as category_color,
-        c.icon as category_icon
-      FROM products p
-      LEFT JOIN categories c ON p.category_id = c.id
-      WHERE 1=1
-    `
-    const params = []
-
-    // Filtro por estado activo/inactivo
-    if (active !== "all") {
-      sql += ` AND p.active = ?`
-      params.push(active === "true")
-    }
-
-    // Filtro por categoría (optimizado con índice)
-    if (category && !isNaN(Number.parseInt(category))) {
-      sql += ` AND p.category_id = ?`
-      params.push(Number.parseInt(category))
-    }
-
-    // Filtro por búsqueda de texto (optimizado con índice FULLTEXT)
-    if (search && search.trim()) {
-      sql += ` AND (p.name LIKE ? OR p.description LIKE ? OR p.barcode LIKE ?)`
-      const searchTerm = `%${search.trim()}%`
-      params.push(searchTerm, searchTerm, searchTerm)
-    }
-
-    // Filtro por nivel de stock
-    if (stockLevel && ["critical", "low", "normal", "high"].includes(stockLevel)) {
-      switch (stockLevel) {
-        case "critical":
-          sql += ` AND p.stock = 0`
-          break
-        case "low":
-          sql += ` AND p.stock > 0 AND p.stock <= p.min_stock`
-          break
-        case "normal":
-          sql += ` AND p.stock > p.min_stock AND p.stock <= (p.min_stock * 2)`
-          break
-        case "high":
-          sql += ` AND p.stock > (p.min_stock * 2)`
-          break
-      }
-    }
-
-    // Filtro por rango de stock personalizado
-    if (minStock && !isNaN(Number.parseFloat(minStock))) {
-      sql += ` AND p.stock >= ?`
-      params.push(Number.parseFloat(minStock))
-    }
-    if (maxStock && !isNaN(Number.parseFloat(maxStock))) {
-      sql += ` AND p.stock <= ?`
-      params.push(Number.parseFloat(maxStock))
-    }
-
-    // Filtro por rango de precios (considera ambos precios)
-    if (minPrice && !isNaN(Number.parseFloat(minPrice))) {
-      sql += ` AND (p.price_list >= ? OR p.price_cash >= ?)`
-      params.push(Number.parseFloat(minPrice), Number.parseFloat(minPrice))
-    }
-    if (maxPrice && !isNaN(Number.parseFloat(maxPrice))) {
-      sql += ` AND (p.price_list <= ? OR p.price_cash <= ?)`
-      params.push(Number.parseFloat(maxPrice), Number.parseFloat(maxPrice))
-    }
-
-    // Ordenamiento optimizado
-    sql += ` ORDER BY p.name ASC, p.id ASC`
-
-    // Paginación con validación mejorada
-    const pageNum = Math.max(1, Number.parseInt(page) || 1)
-    const limitNum = Math.min(100, Math.max(1, Number.parseInt(limit) || 25))
-    const offset = (pageNum - 1) * limitNum
-
-    // Crear consulta para el total (optimizada)
-    let countSql = `SELECT COUNT(*) as total FROM products p WHERE 1=1`
-    const countParams = []
-
-    if (active !== "all") {
-      countSql += ` AND p.active = ?`
-      countParams.push(active === "true")
-    }
-    if (category && !isNaN(Number.parseInt(category))) {
-      countSql += ` AND p.category_id = ?`
-      countParams.push(Number.parseInt(category))
-    }
-    if (search && search.trim()) {
-      countSql += ` AND (p.name LIKE ? OR p.description LIKE ? OR p.barcode LIKE ?)`
-      const searchTerm = `%${search.trim()}%`
-      countParams.push(searchTerm, searchTerm, searchTerm)
-    }
-    if (stockLevel && ["critical", "low", "normal", "high"].includes(stockLevel)) {
-      switch (stockLevel) {
-        case "critical":
-          countSql += ` AND p.stock = 0`
-          break
-        case "low":
-          countSql += ` AND p.stock > 0 AND p.stock <= p.min_stock`
-          break
-        case "normal":
-          countSql += ` AND p.stock > p.min_stock AND p.stock <= (p.min_stock * 2)`
-          break
-        case "high":
-          countSql += ` AND p.stock > (p.min_stock * 2)`
-          break
-      }
-    }
-    if (minStock && !isNaN(Number.parseFloat(minStock))) {
-      countSql += ` AND p.stock >= ?`
-      countParams.push(Number.parseFloat(minStock))
-    }
-    if (maxStock && !isNaN(Number.parseFloat(maxStock))) {
-      countSql += ` AND p.stock <= ?`
-      countParams.push(Number.parseFloat(maxStock))
-    }
-    if (minPrice && !isNaN(Number.parseFloat(minPrice))) {
-      countSql += ` AND (p.price_list >= ? OR p.price_cash >= ?)`
-      countParams.push(Number.parseFloat(minPrice), Number.parseFloat(minPrice))
-    }
-    if (maxPrice && !isNaN(Number.parseFloat(maxPrice))) {
-      countSql += ` AND (p.price_list <= ? OR p.price_cash <= ?)`
-      countParams.push(Number.parseFloat(maxPrice), Number.parseFloat(maxPrice))
-    }
-
-    // Ejecutar consultas en paralelo para mejor performance
-    const [countResult, products] = await Promise.all([
-      executeQuery(countSql, countParams),
-      executeQuery(`${sql} LIMIT ${limitNum} OFFSET ${offset}`, params),
-    ])
-
-    const total = Number.parseInt(countResult[0].total)
-    const totalPages = Math.ceil(total / limitNum)
-
-    res.json({
-      success: true,
-      data: {
-        products,
-        pagination: {
-          page: pageNum,
-          limit: limitNum,
-          total,
-          pages: totalPages,
-        },
-      },
-    })
-  } catch (error) {
-    console.error("Error al obtener productos:", error)
-    res.status(500).json({
-      success: false,
-      message: "Error interno del servidor",
-      code: "PRODUCTS_FETCH_ERROR",
-    })
-  }
-}
-
-// Obtener movimientos de stock con paginación optimizada
-export const getStockMovements = async (req, res) => {
-  try {
-    const { product_id, type, start_date, end_date, user_id, page = 1, limit = 25 } = req.query
-
-    let sql = `
-      SELECT 
-        sm.id,
-        sm.product_id,
-        sm.type,
-        sm.quantity,
-        sm.previous_stock,
-        sm.new_stock,
-        sm.reason,
-        sm.created_at,
-        sm.user_id,
-        p.name as product_name,
-        p.image as product_image,
-        p.color as product_color,
-        p.size as product_size,
-        u.name as user_name
-      FROM stock_movements sm
-      LEFT JOIN products p ON sm.product_id = p.id
-      LEFT JOIN users u ON sm.user_id = u.id
-      WHERE 1=1
-    `
-    const params = []
-
-    // Filtros optimizados con índices
-    if (product_id && !isNaN(Number.parseInt(product_id))) {
-      sql += ` AND sm.product_id = ?`
-      params.push(Number.parseInt(product_id))
-    }
-
-    if (type && ["entrada", "salida", "ajuste"].includes(type)) {
-      sql += ` AND sm.type = ?`
-      params.push(type)
-    }
-
-    if (user_id && !isNaN(Number.parseInt(user_id))) {
-      sql += ` AND sm.user_id = ?`
-      params.push(Number.parseInt(user_id))
-    }
-
-    // Filtros por fecha optimizados
-    if (start_date && /^\d{4}-\d{2}-\d{2}$/.test(start_date)) {
-      sql += ` AND DATE(sm.created_at) >= ?`
-      params.push(start_date)
-    }
-
-    if (end_date && /^\d{4}-\d{2}-\d{2}$/.test(end_date)) {
-      sql += ` AND DATE(sm.created_at) <= ?`
-      params.push(end_date)
-    }
-
-    // Ordenamiento optimizado con índice
-    sql += ` ORDER BY sm.created_at DESC, sm.id DESC`
-
-    // Paginación
-    const pageNum = Math.max(1, Number.parseInt(page) || 1)
-    const limitNum = Math.min(100, Math.max(1, Number.parseInt(limit) || 25))
-    const offset = (pageNum - 1) * limitNum
-
-    // Consulta de conteo optimizada
-    let countSql = `SELECT COUNT(*) as total FROM stock_movements sm WHERE 1=1`
-    const countParams = []
-
-    if (product_id && !isNaN(Number.parseInt(product_id))) {
-      countSql += ` AND sm.product_id = ?`
-      countParams.push(Number.parseInt(product_id))
-    }
-    if (type && ["entrada", "salida", "ajuste"].includes(type)) {
-      countSql += ` AND sm.type = ?`
-      countParams.push(type)
-    }
-    if (user_id && !isNaN(Number.parseInt(user_id))) {
-      countSql += ` AND sm.user_id = ?`
-      countParams.push(Number.parseInt(user_id))
-    }
-    if (start_date && /^\d{4}-\d{2}-\d{2}$/.test(start_date)) {
-      countSql += ` AND DATE(sm.created_at) >= ?`
-      countParams.push(start_date)
-    }
-    if (end_date && /^\d{4}-\d{2}-\d{2}$/.test(end_date)) {
-      countSql += ` AND DATE(sm.created_at) <= ?`
-      countParams.push(end_date)
-    }
-
-    // Ejecutar consultas en paralelo
-    const [countResult, movements] = await Promise.all([
-      executeQuery(countSql, countParams),
-      executeQuery(`${sql} LIMIT ${limitNum} OFFSET ${offset}`, params),
-    ])
-
-    const total = Number.parseInt(countResult[0].total)
-    const totalPages = Math.ceil(total / limitNum)
-
-    res.json({
-      success: true,
-      data: {
-        movements,
-        pagination: {
-          page: pageNum,
-          limit: limitNum,
-          total,
-          pages: totalPages,
-        },
-      },
-    })
-  } catch (error) {
-    console.error("Error al obtener movimientos:", error)
-    res.status(500).json({
-      success: false,
-      message: "Error interno del servidor",
-      code: "MOVEMENTS_FETCH_ERROR",
-    })
-  }
-}
-
-export const getProductById = async (req, res) => {
-  try {
-    const { id } = req.params
-
-    if (!id || isNaN(Number.parseInt(id))) {
-      return res.status(400).json({
-        success: false,
-        message: "ID de producto inválido",
-        code: "INVALID_PRODUCT_ID",
-      })
-    }
-
-    const sql = `
-      SELECT 
-        p.*,
-        c.name as category_name,
-        c.color as category_color,
-        c.icon as category_icon
-      FROM products p
-      LEFT JOIN categories c ON p.category_id = c.id
-      WHERE p.id = ?
-    `
-
-    const products = await executeQuery(sql, [Number.parseInt(id)])
-
-    if (products.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: "Producto no encontrado",
-        code: "PRODUCT_NOT_FOUND",
-      })
-    }
-
-    res.json({
-      success: true,
-      data: products[0],
-    })
-  } catch (error) {
-    console.error("Error al obtener producto:", error)
-    res.status(500).json({
-      success: false,
-      message: "Error interno del servidor",
-      code: "PRODUCT_FETCH_ERROR",
-    })
-  }
-}
-
-export const createProduct = async (req, res) => {
-  try {
-    const { name, description, price_list, price_cash, cost, stock, min_stock, category_id, barcode, image, color, size } = req.body
-
-    // Validaciones básicas
-    if (!name || name.trim().length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: "El nombre del producto es requerido",
-        code: "NAME_REQUIRED",
-      })
-    }
-
-    if (!price_list || isNaN(Number.parseFloat(price_list)) || Number.parseFloat(price_list) <= 0) {
-      return res.status(400).json({
-        success: false,
-        message: "El precio de lista debe ser un número válido mayor a 0",
-        code: "INVALID_PRICE_LIST",
-      })
-    }
-
-    if (!price_cash || isNaN(Number.parseFloat(price_cash)) || Number.parseFloat(price_cash) <= 0) {
-      return res.status(400).json({
-        success: false,
-        message: "El precio de contado debe ser un número válido mayor a 0",
-        code: "INVALID_PRICE_CASH",
-      })
-    }
-
-    const productPriceList = Number.parseFloat(price_list)
-    const productPriceCash = Number.parseFloat(price_cash)
-    const productCost = Number.parseFloat(cost) || 0
-
-    let productStock = 0
-    if (stock !== undefined && stock !== null && stock !== "") {
-      productStock = Number.parseInt(stock)
-      if (isNaN(productStock) || productStock < 0) {
-        return res.status(400).json({
-          success: false,
-          message: "El stock no puede ser negativo",
-          code: "INVALID_STOCK",
-        })
-      }
-
-      if (!Number.isInteger(productStock)) {
-        return res.status(400).json({
-          success: false,
-          message: "El stock debe ser un número entero",
-          code: "INVALID_UNIT_STOCK",
-        })
-      }
-    }
-
-    const minStock =
-      min_stock !== undefined && min_stock !== null && min_stock !== "" ? Number.parseInt(min_stock) : 10 // Valor por defecto
-
-    if (isNaN(minStock) || minStock < 0) {
-      return res.status(400).json({
-        success: false,
-        message: "El stock mínimo debe ser un número válido y no puede ser negativo",
-        code: "INVALID_MIN_STOCK",
-      })
-    }
-
-    if (!Number.isInteger(minStock)) {
-      return res.status(400).json({
-        success: false,
-        message: "El stock mínimo debe ser un número entero",
-        code: "INVALID_MIN_UNIT_STOCK",
-      })
-    }
-
-    const productCategoryId = category_id && !isNaN(Number.parseInt(category_id)) ? Number.parseInt(category_id) : null
-
-    if (productCost < 0) {
-      return res.status(400).json({
-        success: false,
-        message: "El costo no puede ser negativo",
-        code: "INVALID_COST",
-      })
-    }
-
-    if (barcode && barcode.trim()) {
-      const existingProduct = await executeQuery("SELECT id FROM products WHERE barcode = ?", [barcode.trim()])
-      if (existingProduct.length > 0) {
-        return res.status(400).json({
-          success: false,
-          message: "Ya existe un producto con este código de barras",
-          code: "BARCODE_EXISTS",
-        })
-      }
-    }
-
-    // Verificar categoría
-    if (productCategoryId) {
-      const categoryExists = await executeQuery("SELECT id FROM categories WHERE id = ? AND active = true", [
-        productCategoryId,
-      ])
-      if (categoryExists.length === 0) {
-        return res.status(400).json({
-          success: false,
-          message: "La categoría especificada no existe o no está activa",
-          code: "CATEGORY_NOT_FOUND",
-        })
-      }
-    }
-
-    const insertSql = `
-      INSERT INTO products (
-        name, description, price_list, price_cash, cost, stock, min_stock, category_id, 
-        barcode, image, color, size, active, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
-    `
-
-    const insertParams = [
-      name.trim(),
-      description?.trim() || null,
-      productPriceList,
-      productPriceCash,
-      productCost,
-      productStock,
-      minStock,
-      productCategoryId,
-      barcode?.trim() || null,
-      image?.trim() || null,
-      color?.trim() || null,
-      size?.trim() || null,
-      true,
-    ]
-
-    const result = await executeQuery(insertSql, insertParams)
-
-    // Si hay stock inicial, crear movimiento
-    if (productStock > 0) {
-      const movementSql = `
-        INSERT INTO stock_movements (product_id, type, quantity, previous_stock, new_stock, reason, user_id)
-        VALUES (?, 'entrada', ?, 0, ?, 'Stock inicial', ?)
+      let query = `
+        SELECT p.*, c.nombre as categoria_nombre, s.nombre as sucursal_nombre
+        FROM productos p
+        LEFT JOIN categorias c ON p.categoria_id = c.id
+        LEFT JOIN sucursales s ON p.sucursal_id = s.id
+        WHERE p.activo = true
       `
-      await executeQuery(movementSql, [result.insertId, productStock, productStock, req.user?.id || null])
-    }
+      let countQuery = "SELECT COUNT(*) as total FROM productos p WHERE p.activo = true"
+      const queryParams = []
+      const countParams = []
 
-    // Obtener el producto creado
-    const newProduct = await executeQuery(
-      `SELECT 
-        p.*,
-        c.name as category_name,
-        c.color as category_color,
-        c.icon as category_icon
-      FROM products p
-      LEFT JOIN categories c ON p.category_id = c.id
-      WHERE p.id = ?`,
-      [result.insertId],
-    )
+      // Filtro de búsqueda
+      if (search) {
+        query += " AND (p.nombre LIKE ? OR p.descripcion LIKE ? OR p.codigo LIKE ? OR p.fabricante LIKE ?)"
+        countQuery += " AND (p.nombre LIKE ? OR p.descripcion LIKE ? OR p.codigo LIKE ? OR p.fabricante LIKE ?)"
+        const searchParam = `%${search}%`
+        queryParams.push(searchParam, searchParam, searchParam, searchParam)
+        countParams.push(searchParam, searchParam, searchParam, searchParam)
+      }
 
-    res.status(201).json({
-      success: true,
-      message: "Producto creado correctamente",
-      data: newProduct[0],
-    })
-  } catch (error) {
-    console.error("Error al crear producto:", error)
-    res.status(500).json({
-      success: false,
-      message: "Error interno del servidor",
-      code: "PRODUCT_CREATE_ERROR",
-    })
-  }
-}
+      // Filtro por categoría
+      if (categoria_id) {
+        query += " AND p.categoria_id = ?"
+        countQuery += " AND p.categoria_id = ?"
+        queryParams.push(categoria_id)
+        countParams.push(categoria_id)
+      }
 
-export const updateProduct = async (req, res) => {
-  try {
-    const { id } = req.params
-    const { name, description, price_list, price_cash, min_stock, category_id, barcode, image, active, color, size } = req.body
+      // Filtro por unidad de medida
+      if (unidad_medida) {
+        query += " AND p.unidad_medida = ?"
+        countQuery += " AND p.unidad_medida = ?"
+        queryParams.push(unidad_medida)
+        countParams.push(unidad_medida)
+      }
 
-    if (!id || isNaN(Number.parseInt(id))) {
-      return res.status(400).json({
-        success: false,
-        message: "ID de producto inválido",
-        code: "INVALID_PRODUCT_ID",
+      // Filtro por rango de precio
+      if (precio_min) {
+        query += " AND p.precio >= ?"
+        countQuery += " AND p.precio >= ?"
+        queryParams.push(Number.parseFloat(precio_min))
+        countParams.push(Number.parseFloat(precio_min))
+      }
+
+      if (precio_max) {
+        query += " AND p.precio <= ?"
+        countQuery += " AND p.precio <= ?"
+        queryParams.push(Number.parseFloat(precio_max))
+        countParams.push(Number.parseFloat(precio_max))
+      }
+
+      if (sucursales_ids) {
+        const idsArray = sucursales_ids
+          .split(",")
+          .map((id) => id.trim())
+          .filter((id) => id)
+        if (idsArray.length > 0) {
+          const placeholders = idsArray.map(() => "?").join(",")
+          query += ` AND p.sucursal_id IN (${placeholders})`
+          countQuery += ` AND p.sucursal_id IN (${placeholders})`
+          queryParams.push(...idsArray)
+          countParams.push(...idsArray)
+        }
+      } else if (sucursal_id) {
+        query += " AND p.sucursal_id = ?"
+        countQuery += " AND p.sucursal_id = ?"
+        queryParams.push(sucursal_id)
+        countParams.push(sucursal_id)
+      }
+
+      const limitNum = Math.max(1, Math.min(100, Number.parseInt(limit) || 10))
+      const offsetNum = Math.max(
+        0,
+        Number.parseInt(offsetParam) || Number.parseInt(page > 1 ? (page - 1) * limitNum : 0) || 0,
+      )
+
+      query += ` ORDER BY p.created_at DESC LIMIT ${limitNum} OFFSET ${offsetNum}`
+
+      console.log("[v0] Query:", query.substring(0, 100) + "...", "Params count:", queryParams.length)
+
+      const [productos] = await db.pool.execute(query, queryParams)
+      const [countResult] = await db.pool.execute(countQuery, countParams)
+      const total = countResult[0].total
+
+      return ResponseHelper.success(res, {
+        productos,
+        pagination: {
+          page: Number.parseInt(page),
+          limit: limitNum,
+          total,
+          totalPages: Math.ceil(total / limitNum),
+        },
       })
+    } catch (error) {
+      console.error("[v0] Error al obtener productos:", error.message, error.stack)
+      logger.error("Error al obtener productos:", error)
+      return ResponseHelper.error(res, "Error al obtener productos", 500)
     }
+  },
 
-    const existingProduct = await executeQuery("SELECT * FROM products WHERE id = ?", [Number.parseInt(id)])
-    if (existingProduct.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: "Producto no encontrado",
-        code: "PRODUCT_NOT_FOUND",
-      })
+  // Obtener un producto por ID
+  getProductoById: async (req, res) => {
+    try {
+      const { id } = req.params
+      const [productos] = await db.pool.execute(
+        `SELECT 
+          p.*,
+          c.nombre as categoria_nombre,
+          s.nombre as sucursal_nombre
+        FROM productos p
+        LEFT JOIN categorias c ON p.categoria_id = c.id
+        LEFT JOIN sucursales s ON p.sucursal_id = s.id
+        WHERE p.id = ? AND p.activo = true`,
+        [id],
+      )
+
+      if (productos.length === 0) {
+        return ResponseHelper.notFound(res, "Producto no encontrado")
+      }
+
+      return ResponseHelper.success(res, productos[0], "Producto obtenido exitosamente")
+    } catch (error) {
+      logger.error("Error al obtener producto:", error)
+      return ResponseHelper.error(res, "Error al obtener producto", 500)
     }
+  },
 
-    if (!name || name.trim().length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: "El nombre del producto es requerido",
-        code: "NAME_REQUIRED",
-      })
+  // Crear un nuevo producto
+  createProducto: async (req, res) => {
+    const connection = await db.pool.getConnection()
+    try {
+      await connection.beginTransaction()
+
+      const {
+        codigo,
+        nombre,
+        descripcion,
+        categoria_id,
+        fabricante,
+        precio,
+        stock = 0,
+        stock_minimo = 0,
+        sucursal_id,
+        unidad_medida = "unidad",
+      } = req.body
+
+      // Validar campos requeridos
+      if (!nombre || !categoria_id || precio === undefined || !sucursal_id) {
+        await connection.rollback()
+        connection.release()
+        return ResponseHelper.validationError(
+          res,
+          "Faltan campos requeridos: nombre, categoria_id, precio, sucursal_id",
+        )
+      }
+
+      if (!["unidad", "litro"].includes(unidad_medida)) {
+        await connection.rollback()
+        connection.release()
+        return ResponseHelper.validationError(res, "La unidad de medida debe ser 'unidad' o 'litro'")
+      }
+
+      const stockNum = Number.parseFloat(stock)
+      if (isNaN(stockNum) || stockNum < 0) {
+        await connection.rollback()
+        connection.release()
+        return ResponseHelper.validationError(res, "El stock debe ser un número mayor o igual a 0")
+      }
+
+      if (unidad_medida === "unidad" && !Number.isInteger(stockNum)) {
+        await connection.rollback()
+        connection.release()
+        return ResponseHelper.validationError(res, "El stock para productos de unidad debe ser un número entero")
+      }
+
+      // Validar que la categoría existe
+      const [categorias] = await connection.execute("SELECT id FROM categorias WHERE id = ? AND activo = true", [
+        categoria_id,
+      ])
+
+      if (categorias.length === 0) {
+        await connection.rollback()
+        connection.release()
+        return ResponseHelper.notFound(res, "Categoría no encontrada")
+      }
+
+      // Validar que la sucursal existe
+      const [sucursales] = await connection.execute("SELECT id FROM sucursales WHERE id = ? AND activo = true", [
+        sucursal_id,
+      ])
+
+      if (sucursales.length === 0) {
+        await connection.rollback()
+        connection.release()
+        return ResponseHelper.notFound(res, "Sucursal no encontrada")
+      }
+
+      // Verificar si el código ya existe (si se proporciona)
+      if (codigo) {
+        const [existingProducto] = await connection.execute(
+          "SELECT id FROM productos WHERE codigo = ? AND activo = true",
+          [codigo],
+        )
+
+        if (existingProducto.length > 0) {
+          await connection.rollback()
+          connection.release()
+          return ResponseHelper.conflict(res, "El código de producto ya existe")
+        }
+      }
+
+      const [result] = await connection.execute(
+        `INSERT INTO productos (
+          codigo, nombre, descripcion, categoria_id, fabricante, precio, 
+          unidad_medida, stock, stock_minimo, sucursal_id, activo
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, true)`,
+        [
+          codigo || null,
+          nombre,
+          descripcion || null,
+          categoria_id,
+          fabricante || null,
+          precio,
+          unidad_medida,
+          stockNum,
+          stock_minimo,
+          sucursal_id,
+        ],
+      )
+
+      if (stockNum > 0) {
+        await connection.execute(
+          `INSERT INTO movimientos_stock (
+            producto_id, tipo, unidad_medida, cantidad, 
+            stock_anterior, stock_nuevo, motivo, usuario_id
+          ) VALUES (?, 'ENTRADA', ?, ?, 0, ?, 'Stock inicial', ?)`,
+          [result.insertId, unidad_medida, stockNum, stockNum, req.user?.id || null],
+        )
+      }
+
+      await connection.commit()
+
+      // Obtener el producto creado con sus relaciones
+      const [nuevoProducto] = await connection.execute(
+        `SELECT 
+          p.*,
+          c.nombre as categoria_nombre,
+          s.nombre as sucursal_nombre
+        FROM productos p
+        LEFT JOIN categorias c ON p.categoria_id = c.id
+        LEFT JOIN sucursales s ON p.sucursal_id = s.id
+        WHERE p.id = ?`,
+        [result.insertId],
+      )
+
+      connection.release()
+
+      logger.info(`Producto creado: ${nombre} (ID: ${result.insertId}), unidad: ${unidad_medida}`)
+      return ResponseHelper.created(res, nuevoProducto[0], "Producto creado exitosamente")
+    } catch (error) {
+      await connection.rollback()
+      connection.release()
+      logger.error("Error al crear producto:", error)
+      return ResponseHelper.error(res, `Error al crear producto: ${error.message}`, 500)
     }
+  },
 
-    if (!price_list || isNaN(Number.parseFloat(price_list)) || Number.parseFloat(price_list) <= 0) {
-      return res.status(400).json({
-        success: false,
-        message: "El precio de lista debe ser un número válido mayor a 0",
-        code: "INVALID_PRICE_LIST",
-      })
+  // Actualizar un producto
+  updateProducto: async (req, res) => {
+    try {
+      const { id } = req.params
+      const {
+        codigo,
+        nombre,
+        descripcion,
+        categoria_id,
+        fabricante,
+        precio,
+        stock_minimo,
+        sucursal_id,
+        unidad_medida,
+      } = req.body
+
+      // Verificar que el producto existe
+      const [productos] = await db.pool.execute("SELECT * FROM productos WHERE id = ? AND activo = true", [id])
+
+      if (productos.length === 0) {
+        return ResponseHelper.notFound(res, "Producto no encontrado")
+      }
+
+      if (unidad_medida && !["unidad", "litro"].includes(unidad_medida)) {
+        return ResponseHelper.validationError(res, "La unidad de medida debe ser 'unidad' o 'litro'")
+      }
+
+      // Verificar si el código ya existe en otro producto
+      if (codigo && codigo !== productos[0].codigo) {
+        const [existingProducto] = await db.pool.execute(
+          "SELECT id FROM productos WHERE codigo = ? AND id != ? AND activo = true",
+          [codigo, id],
+        )
+
+        if (existingProducto.length > 0) {
+          return ResponseHelper.conflict(res, "El código de producto ya existe")
+        }
+      }
+
+      // Validar que la categoría existe
+      const [categorias] = await db.pool.execute("SELECT id FROM categorias WHERE id = ? AND activo = true", [
+        categoria_id,
+      ])
+
+      if (categorias.length === 0) {
+        return ResponseHelper.notFound(res, "Categoría no encontrada")
+      }
+
+      // Validar que la sucursal existe
+      const [sucursales] = await db.pool.execute("SELECT id FROM sucursales WHERE id = ? AND activo = true", [
+        sucursal_id,
+      ])
+
+      if (sucursales.length === 0) {
+        return ResponseHelper.notFound(res, "Sucursal no encontrada")
+      }
+
+      const updateFields = []
+      const updateValues = []
+
+      updateFields.push(
+        "codigo = ?",
+        "nombre = ?",
+        "descripcion = ?",
+        "categoria_id = ?",
+        "fabricante = ?",
+        "precio = ?",
+      )
+      updateValues.push(codigo || null, nombre, descripcion || null, categoria_id, fabricante || null, precio)
+
+      if (stock_minimo !== undefined) {
+        updateFields.push("stock_minimo = ?")
+        updateValues.push(stock_minimo || 0)
+      }
+
+      updateFields.push("sucursal_id = ?")
+      updateValues.push(sucursal_id)
+
+      if (unidad_medida) {
+        updateFields.push("unidad_medida = ?")
+        updateValues.push(unidad_medida)
+      }
+
+      updateValues.push(id)
+
+      await db.pool.execute(`UPDATE productos SET ${updateFields.join(", ")} WHERE id = ?`, updateValues)
+
+      // Obtener el producto actualizado
+      const [productoActualizado] = await db.pool.execute(
+        `SELECT 
+          p.*,
+          c.nombre as categoria_nombre,
+          s.nombre as sucursal_nombre
+        FROM productos p
+        LEFT JOIN categorias c ON p.categoria_id = c.id
+        LEFT JOIN sucursales s ON p.sucursal_id = s.id
+        WHERE p.id = ?`,
+        [id],
+      )
+
+      logger.info(`Producto actualizado: ${nombre} (ID: ${id})`)
+      return ResponseHelper.updated(res, productoActualizado[0], "Producto actualizado exitosamente")
+    } catch (error) {
+      logger.error("Error al actualizar producto:", error)
+      return ResponseHelper.error(res, "Error al actualizar producto", 500)
     }
+  },
 
-    if (!price_cash || isNaN(Number.parseFloat(price_cash)) || Number.parseFloat(price_cash) <= 0) {
-      return res.status(400).json({
-        success: false,
-        message: "El precio de contado debe ser un número válido mayor a 0",
-        code: "INVALID_PRICE_CASH",
-      })
+  // Cambiar estado de un producto (activar/desactivar)
+  toggleEstadoProducto: async (req, res) => {
+    try {
+      const { id } = req.params
+
+      const [productos] = await db.pool.execute("SELECT * FROM productos WHERE id = ?", [id])
+
+      if (productos.length === 0) {
+        return ResponseHelper.notFound(res, "Producto no encontrado")
+      }
+
+      const nuevoEstado = productos[0].activo ? false : true
+
+      await db.pool.execute("UPDATE productos SET activo = ? WHERE id = ?", [nuevoEstado, id])
+
+      logger.info(`Estado de producto cambiado: ID ${id} -> ${nuevoEstado ? "activo" : "inactivo"}`)
+      return ResponseHelper.updated(res, { activo: nuevoEstado }, "Estado del producto actualizado exitosamente")
+    } catch (error) {
+      logger.error("Error al cambiar estado del producto:", error)
+      return ResponseHelper.error(res, "Error al cambiar estado del producto", 500)
     }
+  },
 
-    const productPriceList = Number.parseFloat(price_list)
-    const productPriceCash = Number.parseFloat(price_cash)
-    const productCost = Number.parseFloat(cost) || 0
+  // Eliminar un producto (soft delete)
+  deleteProducto: async (req, res) => {
+    try {
+      const { id } = req.params
 
-    let minStock = existingProduct[0].min_stock
+      const [productos] = await db.pool.execute("SELECT * FROM productos WHERE id = ? AND activo = true", [id])
 
-    if (min_stock !== undefined) {
-      if (min_stock === null || min_stock === "") {
-        minStock = 10
+      if (productos.length === 0) {
+        return ResponseHelper.notFound(res, "Producto no encontrado")
+      }
+
+      await db.pool.execute("UPDATE productos SET activo = false WHERE id = ?", [id])
+
+      logger.info(`Producto eliminado: ID ${id}`)
+      return ResponseHelper.deleted(res, "Producto eliminado exitosamente")
+    } catch (error) {
+      logger.error("Error al eliminar producto:", error)
+      return ResponseHelper.error(res, "Error al eliminar producto", 500)
+    }
+  },
+
+  // Registrar movimiento de stock
+  registrarMovimiento: async (req, res) => {
+    const connection = await db.pool.getConnection()
+    try {
+      await connection.beginTransaction()
+
+      const { id } = req.params
+      const { tipo, cantidad, motivo } = req.body
+
+      // Validar tipo de movimiento
+      if (!["ENTRADA", "SALIDA", "AJUSTE"].includes(tipo)) {
+        await connection.rollback()
+        connection.release()
+        return ResponseHelper.validationError(res, "Tipo de movimiento inválido")
+      }
+
+      // Obtener producto actual
+      const [productos] = await connection.execute("SELECT * FROM productos WHERE id = ? AND activo = true", [id])
+
+      if (productos.length === 0) {
+        await connection.rollback()
+        connection.release()
+        return ResponseHelper.notFound(res, "Producto no encontrado")
+      }
+
+      const producto = productos[0]
+      const stockAnterior = Number.parseFloat(producto.stock)
+      const unidad_medida = producto.unidad_medida || "unidad"
+
+      const cantidadNum = Number.parseFloat(cantidad)
+      if (isNaN(cantidadNum) || cantidadNum <= 0) {
+        await connection.rollback()
+        connection.release()
+        return ResponseHelper.validationError(res, "La cantidad debe ser un número mayor a 0")
+      }
+
+      if (unidad_medida === "unidad" && !Number.isInteger(cantidadNum)) {
+        await connection.rollback()
+        connection.release()
+        return ResponseHelper.validationError(res, "La cantidad para productos de unidad debe ser un número entero")
+      }
+
+      let stockNuevo = stockAnterior
+
+      // Calcular nuevo stock según tipo de movimiento
+      switch (tipo) {
+        case "ENTRADA":
+          stockNuevo = stockAnterior + cantidadNum
+          break
+        case "SALIDA":
+          stockNuevo = stockAnterior - cantidadNum
+          break
+        case "AJUSTE":
+          stockNuevo = cantidadNum
+          break
+      }
+
+      // Actualizar stock del producto
+      await connection.execute("UPDATE productos SET stock = ? WHERE id = ?", [stockNuevo, id])
+
+      await connection.execute(
+        `INSERT INTO movimientos_stock (
+          producto_id, tipo, unidad_medida, cantidad, 
+          stock_anterior, stock_nuevo, motivo, usuario_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [id, tipo, unidad_medida, cantidadNum, stockAnterior, stockNuevo, motivo || null, req.user?.id || null],
+      )
+
+      await connection.commit()
+
+      // Obtener producto actualizado
+      const [productoActualizado] = await connection.execute(
+        `SELECT 
+          p.*,
+          c.nombre as categoria_nombre,
+          s.nombre as sucursal_nombre
+        FROM productos p
+        LEFT JOIN categorias c ON p.categoria_id = c.id
+        LEFT JOIN sucursales s ON p.sucursal_id = s.id
+        WHERE p.id = ?`,
+        [id],
+      )
+
+      connection.release()
+
+      logger.info(
+        `Movimiento de stock registrado: Producto ${id}, Tipo: ${tipo}, Cantidad: ${cantidadNum} ${unidad_medida}`,
+      )
+      return ResponseHelper.success(res, productoActualizado[0], "Movimiento de stock registrado exitosamente")
+    } catch (error) {
+      await connection.rollback()
+      connection.release()
+      logger.error("Error al registrar movimiento de stock:", error)
+      return ResponseHelper.error(res, "Error al registrar movimiento de stock", 500)
+    }
+  },
+
+  // Obtener historial de movimientos de un producto
+  getMovimientos: async (req, res) => {
+    try {
+      const { id } = req.params
+      let page = Number.parseInt(req.query.page, 10) || 1
+      let limit = Number.parseInt(req.query.limit, 10) || 10
+
+      page = page < 1 ? 1 : page
+      limit = limit < 1 ? 10 : limit
+      limit = Math.min(limit, 100)
+      const offset = (page - 1) * limit
+
+      const query = `
+        SELECT 
+          m.*,
+          u.nombre as usuario_nombre
+        FROM movimientos_stock m
+        LEFT JOIN usuarios u ON m.usuario_id = u.id
+        WHERE m.producto_id = ?
+        ORDER BY m.created_at DESC
+        LIMIT ${limit} OFFSET ${offset}
+      `
+
+      const countQuery = `
+        SELECT COUNT(*) as total
+        FROM movimientos_stock
+        WHERE producto_id = ?
+      `
+
+      const [movimientos] = await db.pool.execute(query, [id])
+      const [countResult] = await db.pool.execute(countQuery, [id])
+      const total = countResult[0].total
+
+      return ResponseHelper.successWithPagination(
+        res,
+        movimientos,
+        { page, limit, total },
+        "Movimientos obtenidos exitosamente",
+      )
+    } catch (error) {
+      logger.error("Error al obtener movimientos:", error)
+      return ResponseHelper.error(res, "Error al obtener movimientos", 500)
+    }
+  },
+
+  // Importar productos desde Excel/CSV
+  importarProductosExcel: async (req, res) => {
+    const connection = await db.pool.getConnection()
+    try {
+      await connection.beginTransaction()
+
+      const { productos, sucursal_id } = req.body
+
+      if (!productos || !Array.isArray(productos) || productos.length === 0) {
+        await connection.rollback()
+        connection.release()
+        return ResponseHelper.validationError(res, "No se proporcionaron productos para importar")
+      }
+
+      if (!sucursal_id) {
+        await connection.rollback()
+        connection.release()
+        return ResponseHelper.validationError(res, "Debe seleccionar una sucursal")
+      }
+
+      // Validar que la sucursal existe
+      const [sucursales] = await connection.execute("SELECT id FROM sucursales WHERE id = ? AND activo = true", [
+        sucursal_id,
+      ])
+
+      if (sucursales.length === 0) {
+        await connection.rollback()
+        connection.release()
+        return ResponseHelper.notFound(res, "Sucursal no encontrada")
+      }
+
+      const categoriasCache = await importHelper.procesarCategorias(connection, productos)
+
+      const resultado = await importHelper.procesarProductosPorLotes(
+        connection,
+        productos,
+        sucursal_id,
+        categoriasCache,
+        req.user?.id,
+      )
+
+      await connection.commit()
+      connection.release()
+
+      const { productosCreados, productosActualizados, productosConError, errores } = resultado
+
+      const mensaje = `Importación completada: ${productosCreados} creados, ${productosActualizados} actualizados, ${productosConError} con errores`
+
+      if (productosConError > 0) {
+        logger.warn(mensaje)
+        logger.warn(`Total de errores en importación: ${errores.length}`)
       } else {
-        minStock = Number.parseInt(min_stock)
-        if (isNaN(minStock) || minStock < 0) {
-          return res.status(400).json({
-            success: false,
-            message: "El stock mínimo debe ser un número válido y no puede ser negativo",
-            code: "INVALID_MIN_STOCK",
-          })
-        }
-
-        if (!Number.isInteger(minStock)) {
-          return res.status(400).json({
-            success: false,
-            message: "El stock mínimo debe ser un número entero",
-            code: "INVALID_MIN_UNIT_STOCK",
-          })
-        }
+        logger.info(mensaje)
       }
+
+      return ResponseHelper.success(
+        res,
+        {
+          productosCreados,
+          productosActualizados,
+          productosConError,
+          errores: errores.slice(0, 50),
+          totalErrores: errores.length,
+          totalProcesados: productosCreados + productosActualizados + productosConError,
+        },
+        mensaje,
+      )
+    } catch (error) {
+      await connection.rollback()
+      connection.release()
+      logger.error("Error al importar productos desde Excel:", error)
+      return ResponseHelper.serverError(res, "Error al importar productos desde Excel")
     }
+  },
 
-    const productCategoryId = category_id && !isNaN(Number.parseInt(category_id)) ? Number.parseInt(category_id) : null
-    const productActive = active !== undefined ? Boolean(active) : true
+  // Exportar productos a Excel
+  exportarProductosExcel: async (req, res) => {
+    try {
+      console.log("[v0] Iniciando exportación de productos a Excel")
+      const { search, categoria_id, unidad_medida, precio_min, precio_max, sucursal_id, sucursales_ids } = req.query
 
-    if (productCost < 0) {
-      return res.status(400).json({
-        success: false,
-        message: "El costo no puede ser negativo",
-        code: "INVALID_COST",
-      })
-    }
+      let query = `
+        SELECT 
+          p.id,
+          p.codigo,
+          p.nombre,
+          p.descripcion,
+          c.nombre as categoria,
+          p.unidad_medida,
+          p.precio,
+          p.stock,
+          p.stock_minimo,
+          s.nombre as sucursal,
+          p.fabricante,
+          p.activo,
+          DATE_FORMAT(p.created_at, '%Y-%m-%d %H:%i:%s') as fecha_creacion
+        FROM productos p
+        LEFT JOIN categorias c ON p.categoria_id = c.id
+        LEFT JOIN sucursales s ON p.sucursal_id = s.id
+        WHERE p.activo = true
+      `
+      const queryParams = []
 
-    if (barcode && barcode.trim()) {
-      const duplicateBarcode = await executeQuery("SELECT id FROM products WHERE barcode = ? AND id != ?", [
-        barcode.trim(),
-        Number.parseInt(id),
-      ])
-      if (duplicateBarcode.length > 0) {
-        return res.status(400).json({
-          success: false,
-          message: "Ya existe otro producto con este código de barras",
-          code: "BARCODE_EXISTS",
-        })
+      // Aplicar los mismos filtros que en getProductos
+      if (search) {
+        query += " AND (p.nombre LIKE ? OR p.descripcion LIKE ? OR p.codigo LIKE ? OR p.fabricante LIKE ?)"
+        const searchParam = `%${search}%`
+        queryParams.push(searchParam, searchParam, searchParam, searchParam)
       }
-    }
 
-    if (productCategoryId) {
-      const categoryExists = await executeQuery("SELECT id FROM categories WHERE id = ? AND active = true", [
-        productCategoryId,
-      ])
-      if (categoryExists.length === 0) {
-        return res.status(400).json({
-          success: false,
-          message: "La categoría especificada no existe o no está activa",
-          code: "CATEGORY_NOT_FOUND",
-        })
+      if (categoria_id) {
+        query += " AND p.categoria_id = ?"
+        queryParams.push(categoria_id)
       }
-    }
 
-    const updateSql = `
-      UPDATE products 
-      SET name = ?, description = ?, price_list = ?, price_cash = ?, cost = ?, min_stock = ?, 
-          category_id = ?, barcode = ?, image = ?, color = ?, size = ?, active = ?, updated_at = NOW()
-      WHERE id = ?
-    `
+      if (unidad_medida) {
+        query += " AND p.unidad_medida = ?"
+        queryParams.push(unidad_medida)
+      }
 
-    const updateParams = [
-      name.trim(),
-      description?.trim() || null,
-      productPriceList,
-      productPriceCash,
-      productCost,
-      minStock,
-      productCategoryId,
-      barcode?.trim() || null,
-      image?.trim() || null,
-      color?.trim() || null,
-      size?.trim() || null,
-      productActive,
-      Number.parseInt(id),
-    ]
+      if (precio_min) {
+        query += " AND p.precio >= ?"
+        queryParams.push(Number.parseFloat(precio_min))
+      }
 
-    await executeQuery(updateSql, updateParams)
+      if (precio_max) {
+        query += " AND p.precio <= ?"
+        queryParams.push(Number.parseFloat(precio_max))
+      }
 
-    const updatedProduct = await executeQuery(
-      `SELECT 
-        p.*,
-        c.name as category_name,
-        c.color as category_color,
-        c.icon as category_icon
-      FROM products p
-      LEFT JOIN categories c ON p.category_id = c.id
-      WHERE p.id = ?`,
-      [Number.parseInt(id)],
-    )
-
-    res.json({
-      success: true,
-      message: "Producto actualizado correctamente",
-      data: updatedProduct[0],
-    })
-  } catch (error) {
-    console.error("Error al actualizar producto:", error)
-    res.status(500).json({
-      success: false,
-      message: "Error interno del servidor",
-      code: "PRODUCT_UPDATE_ERROR",
-    })
-  }
-}
-
-export const deleteProduct = async (req, res) => {
-  try {
-    const { id } = req.params
-
-    if (!id || isNaN(Number.parseInt(id))) {
-      return res.status(400).json({
-        success: false,
-        message: "ID de producto inválido",
-        code: "INVALID_PRODUCT_ID",
-      })
-    }
-
-    const existingProduct = await executeQuery("SELECT * FROM products WHERE id = ?", [Number.parseInt(id)])
-    if (existingProduct.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: "Producto no encontrado",
-        code: "PRODUCT_NOT_FOUND",
-      })
-    }
-
-    const salesCount = await executeQuery("SELECT COUNT(*) as count FROM sale_items WHERE product_id = ?", [
-      Number.parseInt(id),
-    ])
-
-    if (salesCount[0].count > 0) {
-      // Producto con ventas: solo desactivar para mantener integridad referencial
-      await executeQuery("UPDATE products SET active = FALSE, updated_at = CURRENT_TIMESTAMP WHERE id = ?", [
-        Number.parseInt(id),
-      ])
-
-      res.json({
-        success: true,
-        message: "Producto desactivado correctamente (tiene ventas asociadas)",
-        action: "deactivated",
-      })
-    } else {
-      // Producto sin ventas: eliminar completamente
-      // Primero eliminar movimientos de stock relacionados
-      await executeQuery("DELETE FROM stock_movements WHERE product_id = ?", [Number.parseInt(id)])
-
-      // Luego eliminar el producto
-      await executeQuery("DELETE FROM products WHERE id = ?", [Number.parseInt(id)])
-
-      res.json({
-        success: true,
-        message: "Producto eliminado completamente",
-        action: "deleted",
-      })
-    }
-  } catch (error) {
-    console.error("Error al eliminar producto:", error)
-    res.status(500).json({
-      success: false,
-      message: "Error interno del servidor",
-      code: "PRODUCT_DELETE_ERROR",
-    })
-  }
-}
-
-export const createStockMovement = async (req, res) => {
-  try {
-    const { product_id, type, quantity, reason } = req.body
-
-    if (!product_id || isNaN(Number.parseInt(product_id))) {
-      return res.status(400).json({
-        success: false,
-        message: "ID de producto inválido",
-        code: "INVALID_PRODUCT_ID",
-      })
-    }
-
-    if (!type || !["entrada", "salida", "ajuste"].includes(type)) {
-      return res.status(400).json({
-        success: false,
-        message: "Tipo de movimiento inválido. Debe ser: entrada, salida o ajuste",
-        code: "INVALID_MOVEMENT_TYPE",
-      })
-    }
-
-    if (!quantity || isNaN(Number.parseFloat(quantity))) {
-      return res.status(400).json({
-        success: false,
-        message: "Cantidad inválida",
-        code: "INVALID_QUANTITY",
-      })
-    }
-
-    if (!reason || reason.trim().length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: "La razón del movimiento es requerida",
-        code: "REASON_REQUIRED",
-      })
-    }
-
-    const productId = Number.parseInt(product_id)
-    const movementQuantity = Number.parseInt(quantity)
-
-    const product = await executeQuery("SELECT * FROM products WHERE id = ? AND active = TRUE", [productId])
-    if (product.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: "Producto no encontrado o inactivo",
-        code: "PRODUCT_NOT_FOUND",
-      })
-    }
-
-    const currentProduct = product[0]
-
-    if (!Number.isInteger(movementQuantity)) {
-      return res.status(400).json({
-        success: false,
-        message: "La cantidad debe ser un número entero",
-        code: "INVALID_UNIT_QUANTITY",
-      })
-    }
-
-    const previousStock = Number.parseInt(currentProduct.stock)
-    let newStock = 0
-    let stockChange = 0
-
-    switch (type) {
-      case "entrada":
-        if (movementQuantity <= 0) {
-          return res.status(400).json({
-            success: false,
-            message: "La cantidad para entrada debe ser mayor a 0",
-            code: "INVALID_ENTRY_QUANTITY",
-          })
+      // Filtros de sucursales (igual que en getProductos)
+      if (sucursales_ids) {
+        const idsArray = sucursales_ids
+          .split(",")
+          .map((id) => id.trim())
+          .filter((id) => id)
+        if (idsArray.length > 0) {
+          const placeholders = idsArray.map(() => "?").join(",")
+          query += ` AND p.sucursal_id IN (${placeholders})`
+          queryParams.push(...idsArray)
         }
-        stockChange = Math.abs(movementQuantity)
-        newStock = previousStock + stockChange
-        break
+      } else if (sucursal_id) {
+        query += " AND p.sucursal_id = ?"
+        queryParams.push(sucursal_id)
+      }
 
-      case "salida":
-        if (movementQuantity <= 0) {
-          return res.status(400).json({
-            success: false,
-            message: "La cantidad para salida debe ser mayor a 0",
-            code: "INVALID_EXIT_QUANTITY",
-          })
-        }
-        stockChange = -Math.abs(movementQuantity)
-        newStock = previousStock + stockChange
+      query += " ORDER BY p.created_at DESC"
 
-        if (newStock < 0) {
-          return res.status(400).json({
-            success: false,
-            message: `No hay suficiente stock. Stock actual: ${previousStock}, cantidad solicitada: ${Math.abs(movementQuantity)}`,
-            code: "INSUFFICIENT_STOCK",
-          })
-        }
-        break
+      console.log("[v0] Ejecutando consulta SQL")
+      const [productos] = await db.pool.execute(query, queryParams)
+      console.log(`[v0] Se encontraron ${productos.length} productos`)
 
-      case "ajuste":
-        if (movementQuantity < 0) {
-          return res.status(400).json({
-            success: false,
-            message: "El stock no puede ser negativo",
-            code: "NEGATIVE_STOCK",
-          })
-        }
-        newStock = Math.abs(movementQuantity)
-        stockChange = newStock - previousStock
-        break
+      const workbook = XLSX.utils.book_new()
+
+      // Formatear los datos para Excel
+      const datosExcel = productos.map((p) => ({
+        ID: p.id,
+        Código: p.codigo || "",
+        Nombre: p.nombre,
+        Descripción: p.descripcion || "",
+        Categoría: p.categoria || "",
+        "Unidad de Medida": p.unidad_medida || "",
+        Precio: Number(p.precio) || 0,
+        Stock: Number(p.stock) || 0,
+        "Stock Mínimo": Number(p.stock_minimo) || 0,
+        Sucursal: p.sucursal || "",
+        Fabricante: p.fabricante || "",
+        Estado: p.activo ? "Activo" : "Inactivo",
+        "Fecha de Creación": p.fecha_creacion,
+      }))
+
+      console.log("[v0] Datos formateados para Excel")
+
+      // Crear la hoja de trabajo
+      const worksheet = XLSX.utils.json_to_sheet(datosExcel)
+
+      // Ajustar el ancho de las columnas
+      const columnWidths = [
+        { wch: 8 }, // ID
+        { wch: 15 }, // Código
+        { wch: 30 }, // Nombre
+        { wch: 40 }, // Descripción
+        { wch: 20 }, // Categoría
+        { wch: 18 }, // Unidad de Medida
+        { wch: 12 }, // Precio
+        { wch: 10 }, // Stock
+        { wch: 15 }, // Stock Mínimo
+        { wch: 20 }, // Sucursal
+        { wch: 20 }, // Fabricante
+        { wch: 10 }, // Estado
+        { wch: 20 }, // Fecha de Creación
+      ]
+      worksheet["!cols"] = columnWidths
+
+      // Agregar la hoja al libro
+      XLSX.utils.book_append_sheet(workbook, worksheet, "Productos")
+
+      console.log("[v0] Generando buffer del archivo Excel")
+      const excelBuffer = XLSX.write(workbook, {
+        type: "buffer",
+        bookType: "xlsx",
+        compression: true,
+      })
+
+      console.log(`[v0] Buffer generado, tamaño: ${excelBuffer.length} bytes`)
+
+      const fecha = new Date().toISOString().split("T")[0]
+      const filename = `productos_${fecha}.xlsx`
+
+      res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+      res.setHeader("Content-Disposition", `attachment; filename="${filename}"`)
+      res.setHeader("Content-Length", excelBuffer.length)
+
+      console.log("[v0] Enviando archivo Excel al cliente")
+      // Enviar el archivo
+      return res.send(excelBuffer)
+    } catch (error) {
+      console.error("[v0] Error al exportar productos a Excel:", error.message, error.stack)
+      logger.error("Error al exportar productos a Excel:", error)
+      return res.status(500).json({
+        success: false,
+        message: "Error al exportar productos a Excel",
+        error: error.message,
+      })
     }
-
-    const queries = []
-
-    queries.push({
-      query: `INSERT INTO stock_movements (product_id, type, quantity, previous_stock, new_stock, reason, user_id) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      params: [productId, type, stockChange, previousStock, newStock, reason.trim(), req.user?.id || null],
-    })
-
-    queries.push({
-      query: `UPDATE products SET stock = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
-      params: [newStock, productId],
-    })
-
-    const results = await executeTransaction(queries)
-    const movementId = results[0].insertId
-
-    const newMovement = await executeQuery(
-      `SELECT sm.*, p.name as product_name, p.image as product_image, u.name as user_name FROM stock_movements sm LEFT JOIN products p ON sm.product_id = p.id LEFT JOIN users u ON sm.user_id = u.id WHERE sm.id = ?`,
-      [movementId],
-    )
-
-    res.status(201).json({
-      success: true,
-      message: "Movimiento de stock registrado correctamente",
-      data: newMovement[0],
-    })
-  } catch (error) {
-    console.error("Error al crear movimiento:", error)
-    res.status(500).json({
-      success: false,
-      message: "Error interno del servidor",
-      code: "MOVEMENT_CREATE_ERROR",
-    })
-  }
+  },
 }
 
-export const getStockAlerts = async (req, res) => {
-  try {
-    const sql = `SELECT p.id, p.name, p.stock, p.min_stock, c.name as category_name, CASE WHEN p.stock = 0 THEN 'critical' WHEN p.stock <= COALESCE(p.min_stock, 10) THEN 'warning' WHEN p.stock <= (COALESCE(p.min_stock, 10) * 1.5) THEN 'low' ELSE 'normal' END as level FROM products p LEFT JOIN categories c ON p.category_id = c.id WHERE p.active = TRUE AND p.stock <= COALESCE(p.min_stock, 10) AND COALESCE(p.min_stock, 10) > 0 ORDER BY CASE WHEN p.stock = 0 THEN 1 WHEN p.stock <= COALESCE(p.min_stock, 10) THEN 2 WHEN p.stock <= (COALESCE(p.min_stock, 10) * 1.5) THEN 3 ELSE 4 END, p.stock ASC, p.name ASC`
-
-    const alerts = await executeQuery(sql)
-
-    res.json({
-      success: true,
-      data: alerts,
-    })
-  } catch (error) {
-    console.error("Error al obtener alertas:", error)
-    res.status(500).json({
-      success: false,
-      message: "Error interno del servidor",
-      code: "ALERTS_FETCH_ERROR",
-    })
-  }
-}
-
-export const getStockStats = async (req, res) => {
-  try {
-    const generalStats = await executeQuery(`SELECT COUNT(*) as total_products, SUM(CASE WHEN active = TRUE THEN 1 ELSE 0 END) as active_products, SUM(CASE WHEN active = TRUE AND stock <= min_stock THEN 1 ELSE 0 END) as low_stock, SUM(CASE WHEN active = TRUE AND stock = 0 THEN 1 ELSE 0 END) as out_of_stock, COALESCE(SUM(CASE WHEN active = TRUE THEN stock * price_list ELSE 0 END), 0) as total_inventory_value FROM products`)
-
-    const monthlyMovements = await executeQuery(`SELECT type, COUNT(*) as count, SUM(ABS(quantity)) as total_quantity FROM stock_movements WHERE MONTH(created_at) = MONTH(CURRENT_DATE()) AND YEAR(created_at) = YEAR(CURRENT_DATE()) GROUP BY type`)
-
-    const lowStockProducts = await executeQuery(`SELECT p.id, p.name, p.stock, COALESCE(p.min_stock, 10) as min_stock, c.name as category_name, CASE WHEN p.stock = 0 THEN 'critical' WHEN p.stock <= COALESCE(p.min_stock, 10) THEN 'warning' WHEN p.stock <= (COALESCE(p.min_stock, 10) * 1.5) THEN 'low' ELSE 'normal' END as level FROM products p LEFT JOIN categories c ON p.category_id = c.id WHERE p.active = TRUE AND p.stock <= COALESCE(p.min_stock, 10) AND COALESCE(p.min_stock, 10) > 0 ORDER BY CASE WHEN p.stock = 0 THEN 1 WHEN p.stock <= COALESCE(p.min_stock, 10) THEN 2 WHEN p.stock <= (COALESCE(p.min_stock, 10) * 1.5) THEN 3 ELSE 4 END, p.stock ASC LIMIT 10`)
-
-    res.json({
-      success: true,
-      data: {
-        general: generalStats[0],
-        monthly_movements: monthlyMovements,
-        low_stock_products: lowStockProducts,
-      },
-    })
-  } catch (error) {
-    console.error("Error al obtener estadísticas:", error)
-    res.status(500).json({
-      success: false,
-      message: "Error interno del servidor",
-      code: "STATS_FETCH_ERROR",
-    })
-  }
-}
+module.exports = productosController
