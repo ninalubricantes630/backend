@@ -322,8 +322,10 @@ const crearVenta = async (req, res) => {
     let totalConInteresTarjetaFinal = null
     let totalFinalCaja = totalBase
 
-    if (tipo_pago === "TARJETA_CREDITO" && tarjeta_id && numero_cuotas && Number.parseInt(numero_cuotas) > 1) {
-      interesTarjetaPorcentaje = Number.parseFloat(tasa_interes_tarjeta) || 0
+    // Aplicar interés de tarjeta cuando haya tasa (incluye 1 cuota con interés, no solo más de 1 cuota)
+    const tasaInteresTarjetaNum = Number.parseFloat(tasa_interes_tarjeta) || 0
+    if (tipo_pago === "TARJETA_CREDITO" && tarjeta_id && numero_cuotas && tasaInteresTarjetaNum > 0) {
+      interesTarjetaPorcentaje = tasaInteresTarjetaNum
       interesTarjetaMonto = (totalBase * interesTarjetaPorcentaje) / 100
       totalConInteresTarjetaFinal = totalBase + interesTarjetaMonto
       totalFinalCaja = totalConInteresTarjetaFinal
@@ -368,6 +370,9 @@ const crearVenta = async (req, res) => {
     const tipoPagoFinal = esPagoDividido ? 'PAGO_MULTIPLE' : tipo_pago
     const tipoPago2Upper = tipo_pago_2 ? tipo_pago_2.toUpperCase() : null
 
+    // Total a guardar: monto con interés de tarjeta cuando aplique (reportes, caja y detalle usan este valor)
+    const totalAGuardar = totalConInteresTarjetaFinal ?? totalBase
+
     console.log("[v0] Guardando venta con tipo_pago:", tipoPagoFinal, "esPagoDividido:", esPagoDividido)
 
     let ventaResult
@@ -392,7 +397,7 @@ const crearVenta = async (req, res) => {
           Number(descuentoNum).toFixed(2),
           Number(interesSistemaPorcentaje).toFixed(2),
           Number(interesSistemaMonto).toFixed(2),
-          Number(totalBase).toFixed(2),
+          Number(totalAGuardar).toFixed(2),
           Number(interesTarjetaPorcentaje).toFixed(2),
           Number(interesTarjetaMonto).toFixed(2),
           totalConInteresTarjetaFinal ? Number(totalConInteresTarjetaFinal).toFixed(2) : null,
@@ -429,7 +434,7 @@ const crearVenta = async (req, res) => {
           Number(descuentoNum).toFixed(2),
           Number(interesSistemaPorcentaje).toFixed(2),
           Number(interesSistemaMonto).toFixed(2),
-          Number(totalBase).toFixed(2),
+          Number(totalAGuardar).toFixed(2),
           Number(interesTarjetaPorcentaje).toFixed(2),
           Number(interesTarjetaMonto).toFixed(2),
           totalConInteresTarjetaFinal ? Number(totalConInteresTarjetaFinal).toFixed(2) : null,
