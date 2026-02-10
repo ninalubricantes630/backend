@@ -536,6 +536,8 @@ const serviciosController = {
             const stockNuevo = stockAnterior - cantidad
             const unidad_medida = productoData[0].unidad_medida
 
+            // El stock puede quedar en negativo (permite usar/vender productos con stock 0, igual que en ventas)
+
             await connection.execute(
               `INSERT INTO detalle_servicio_productos 
                (servicio_item_id, producto_id, cantidad, unidad_medida, precio_unitario, subtotal)
