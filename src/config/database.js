@@ -54,30 +54,43 @@ const dbConfig = createDbConfig()
 // Crear pool de conexiones
 const pool = mysql.createPool(dbConfig)
 
-const testConnection = async () => {
-  try {
-    const connection = await pool.getConnection()
-    const [rows] = await connection.execute("SELECT VERSION() as version, NOW() as server_time")
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
-    logger.info("MySQL connection established", {
-      database: dbConfig.database,
-      host: `${dbConfig.host}:${dbConfig.port}`,
-      version: rows[0].version,
-      serverTime: rows[0].server_time,
-      connectionType: process.env.DATABASE_URL ? "DATABASE_URL" : "individual_vars",
-    })
+const testConnection = async (options = {}) => {
+  const maxAttempts = options.maxAttempts ?? (process.env.NODE_ENV === "production" ? 15 : 3)
+  const delayMs = options.delayMs ?? 2000
 
-    connection.release()
-    return true
-  } catch (error) {
-    logger.error("Error connecting to MySQL", {
-      error: error.message,
-      code: error.code,
-      host: dbConfig.host,
-      database: dbConfig.database,
-    })
-    return false
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const connection = await pool.getConnection()
+      const [rows] = await connection.execute("SELECT VERSION() as version, NOW() as server_time")
+
+      logger.info("MySQL connection established", {
+        database: dbConfig.database,
+        host: `${dbConfig.host}:${dbConfig.port}`,
+        version: rows[0].version,
+        serverTime: rows[0].server_time,
+        connectionType: process.env.DATABASE_URL ? "DATABASE_URL" : "individual_vars",
+        attempt: attempt > 1 ? `${attempt}/${maxAttempts}` : undefined,
+      })
+
+      connection.release()
+      return true
+    } catch (error) {
+      const isLast = attempt === maxAttempts
+      logger[isLast ? "error" : "warn"]("Error connecting to MySQL", {
+        error: error.message,
+        code: error.code,
+        host: dbConfig.host,
+        database: dbConfig.database,
+        attempt: `${attempt}/${maxAttempts}`,
+      })
+      if (isLast) return false
+      logger.info(`Reintentando conexión en ${delayMs / 1000}s...`)
+      await sleep(delayMs)
+    }
   }
+  return false
 }
 
 const isConnectionLostError = (err) =>

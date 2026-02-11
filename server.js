@@ -194,10 +194,10 @@ app.use(globalErrorHandler)
 
 const initializeServer = async () => {
   try {
-    // Probar conexión a base de datos
+    // Probar conexión a base de datos (con reintentos en producción para esperar a que MySQL esté listo)
     const dbConnected = await db.testConnection()
     if (!dbConnected) {
-      logger.error("No se pudo conectar a la base de datos")
+      logger.error("No se pudo conectar a la base de datos después de varios intentos. Revisa DATABASE_URL y que el servicio MySQL esté activo.")
       process.exit(1)
     }
 
