@@ -4,45 +4,48 @@ require("dotenv").config()
 const logger = require("./logger")
 
 const createDbConfig = () => {
+  const baseOptions = {
+    waitForConnections: true,
+    queueLimit: 0,
+    charset: "utf8mb4",
+    timezone: "local",
+    multipleStatements: false,
+    // Mantener conexiones vivas y reducir "Connection lost" (Railway/MySQL)
+    enableKeepAlive: true,
+    keepAliveInitialDelay: 10000,
+  }
+
   // If DATABASE_URL is provided (production), parse it
   if (process.env.DATABASE_URL) {
     const url = new URL(process.env.DATABASE_URL)
     return {
+      ...baseOptions,
       host: url.hostname,
       user: url.username,
       password: url.password,
       database: url.pathname.slice(1), // Remove leading slash
       port: Number.parseInt(url.port) || 3306,
-      waitForConnections: true,
       connectionLimit:
         Number.parseInt(process.env.DB_CONNECTION_LIMIT) || (process.env.NODE_ENV === "production" ? 50 : 10),
-      queueLimit: 0,
-      charset: "utf8mb4",
-      timezone: "local",
       ssl:
         process.env.NODE_ENV === "production"
           ? {
-              rejectUnauthorized: false, // Changed to false for Railway compatibility
+              rejectUnauthorized: false, // Railway compatibility
             }
           : false,
-      multipleStatements: false,
     }
   }
 
   // Otherwise use individual environment variables (development)
   return {
+    ...baseOptions,
     host: process.env.DB_HOST || "localhost",
     user: process.env.DB_USER || "root",
     password: process.env.DB_PASSWORD || "",
     database: process.env.DB_NAME || "milo_lubricantes",
     port: Number.parseInt(process.env.DB_PORT) || 3306,
-    waitForConnections: true,
     connectionLimit: Number.parseInt(process.env.DB_CONNECTION_LIMIT) || 10,
-    queueLimit: 0,
-    charset: "utf8mb4",
-    timezone: "local",
     ssl: process.env.DB_SSL === "true" ? { rejectUnauthorized: false } : false,
-    multipleStatements: false,
   }
 }
 
@@ -77,7 +80,10 @@ const testConnection = async () => {
   }
 }
 
-const query = async (sql, params = [], logQuery = false) => {
+const isConnectionLostError = (err) =>
+  err && (err.code === "PROTOCOL_CONNECTION_LOST" || err.code === "ECONNRESET" || err.code === "ETIMEDOUT")
+
+const query = async (sql, params = [], logQuery = false, retried = false) => {
   try {
     if (logQuery && process.env.NODE_ENV === "development") {
       logger.debug("Executing database query", {
@@ -89,8 +95,13 @@ const query = async (sql, params = [], logQuery = false) => {
     const [results] = await pool.execute(sql, params)
     return results
   } catch (error) {
+    if (isConnectionLostError(error) && !retried) {
+      logger.warn("Database connection lost, retrying once...", { code: error.code })
+      await new Promise((r) => setTimeout(r, 500))
+      return query(sql, params, logQuery, true)
+    }
     logger.error("Database query error", {
-      sql: sql.substring(0, 100) + "...",
+      sql: sql.substring(0, 100) + (sql.length > 100 ? "..." : ""),
       params,
       error: error.message,
       code: error.code,

@@ -111,6 +111,21 @@ const authenticateToken = async (req, res, next) => {
       })
     }
 
+    const isDbUnavailable =
+      error.code === "PROTOCOL_CONNECTION_LOST" ||
+      error.code === "ECONNRESET" ||
+      error.code === "ETIMEDOUT" ||
+      error.code === "ECONNREFUSED"
+
+    if (isDbUnavailable) {
+      return res.status(503).json({
+        success: false,
+        error: "SERVICE_UNAVAILABLE",
+        message: "El servicio no está disponible temporalmente. Por favor, intenta de nuevo en unos segundos.",
+        code: "DATABASE_UNAVAILABLE",
+      })
+    }
+
     return res.status(500).json({
       success: false,
       error: "INTERNAL_ERROR",
