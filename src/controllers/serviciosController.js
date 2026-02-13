@@ -267,15 +267,6 @@ const serviciosController = {
       // Convertir pago_dividido a boolean (puede venir como string "true"/"false")
       const esPagoDividido = pago_dividido === true || pago_dividido === "true" || pago_dividido === 1
 
-      console.log("[v0] Servicio - Datos recibidos pago dividido:", {
-        pago_dividido,
-        esPagoDividido,
-        tipo_pago,
-        tipo_pago_2,
-        monto_pago_1,
-        monto_pago_2
-      })
-
       if (!cliente_id) {
         return res.status(400).json({ error: "Cliente ID es requerido" })
       }
@@ -294,14 +285,14 @@ const serviciosController = {
 
       const tipo_pago_upper = tipo_pago.toUpperCase().trim()
 
-  const tiposPagoValidos = ["EFECTIVO", "TARJETA_CREDITO", "TRANSFERENCIA", "CUENTA_CORRIENTE", "PAGO_MULTIPLE"]
-  if (!tiposPagoValidos.includes(tipo_pago_upper)) {
-    await connection.rollback()
-    connection.release()
-    return res
-      .status(400)
-      .json({ error: `Tipo de pago inválido. Valores permitidos: ${tiposPagoValidos.join(", ")}` })
-  }
+      const tiposPagoValidos = ["EFECTIVO", "TARJETA_CREDITO", "TRANSFERENCIA", "CUENTA_CORRIENTE", "PAGO_MULTIPLE"]
+      if (!tiposPagoValidos.includes(tipo_pago_upper)) {
+        await connection.rollback()
+        connection.release()
+        return res
+          .status(400)
+          .json({ error: `Tipo de pago inválido. Valores permitidos: ${tiposPagoValidos.join(", ")}` })
+      }
 
       const usuario_id = req.user?.id || null
 
@@ -397,10 +388,8 @@ const serviciosController = {
       const totalAGuardar = totalConInteresTarjetaFinal ?? totalBase
 
       // Determinar el tipo de pago para guardar en la base de datos
-      const tipoPagoFinal = esPagoDividido ? 'PAGO_MULTIPLE' : tipo_pago_upper
+      const tipoPagoFinal = esPagoDividido ? "PAGO_MULTIPLE" : tipo_pago_upper
       const tipoPago2Upper = tipo_pago_2 ? tipo_pago_2.toUpperCase() : null
-
-      console.log("[v0] Servicio - Guardando con tipo_pago:", tipoPagoFinal, "esPagoDividido:", esPagoDividido)
 
       let result
       try {
@@ -569,13 +558,6 @@ const serviciosController = {
       if (tipo_pago_upper !== "CUENTA_CORRIENTE") {
         // Verificar si es pago dividido
         if (esPagoDividido && tipo_pago_2 && monto_pago_1 && monto_pago_2) {
-          console.log("[v0] Servicio - Registrando movimientos de caja para pago dividido:", {
-            tipo_pago_upper,
-            tipo_pago_2,
-            monto_pago_1,
-            monto_pago_2
-          })
-          
           // Registrar primer movimiento de caja
           await connection.execute(
             `INSERT INTO movimientos_caja 
