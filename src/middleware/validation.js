@@ -167,7 +167,32 @@ const validateClienteId = [
 
 const validateServicio = [
   body("cliente_id").isInt({ min: 1 }).withMessage("ID de cliente inválido"),
-  body("vehiculo_id").isInt({ min: 1 }).withMessage("ID de vehículo inválido"),
+  body("vehiculo_id")
+    .optional()
+    .isInt({ min: 1 })
+    .withMessage("ID de vehículo inválido"),
+  body("vehiculo_ids")
+    .optional()
+    .isArray()
+    .withMessage("vehiculo_ids debe ser un array")
+    .custom((ids) => {
+      if (ids && ids.length > 0) {
+        for (const id of ids) {
+          if (!Number.isInteger(Number(id)) || Number(id) < 1) {
+            throw new Error("Cada ID en vehiculo_ids debe ser un entero positivo")
+          }
+        }
+      }
+      return true
+    }),
+  body().custom((value, { req }) => {
+    const hasVehiculoId = req.body.vehiculo_id != null && req.body.vehiculo_id !== ""
+    const hasVehiculoIds = Array.isArray(req.body.vehiculo_ids) && req.body.vehiculo_ids.length > 0
+    if (!hasVehiculoId && !hasVehiculoIds) {
+      throw new Error("Se requiere vehiculo_id o vehiculo_ids con al menos un vehículo")
+    }
+    return true
+  }),
   body("sucursal_id").isInt({ min: 1 }).withMessage("ID de sucursal inválido"),
   body("empleados")
     .optional()

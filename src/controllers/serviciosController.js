@@ -42,7 +42,8 @@ const serviciosController = {
       const countParams = []
 
       const itemsCountQuery = `(SELECT COUNT(*) FROM servicio_items si2 WHERE si2.servicio_id = s.id) as items_count`
-      query = query.replace("s.tipo_pago", `s.tipo_pago, ${itemsCountQuery}`)
+      const vehiculosPatentesQuery = `(SELECT GROUP_CONCAT(v2.patente ORDER BY sv.id SEPARATOR ', ') FROM servicio_vehiculos sv INNER JOIN vehiculos v2 ON sv.vehiculo_id = v2.id WHERE sv.servicio_id = s.id) as vehiculos_patentes`
+      query = query.replace("s.tipo_pago", `s.tipo_pago, ${itemsCountQuery}, ${vehiculosPatentesQuery}`)
 
       // Filtro de búsqueda
       if (search) {
@@ -182,11 +183,11 @@ const serviciosController = {
       )
 
       const [items] = await db.pool.execute(
-        `SELECT si.*, ts.nombre as tipo_servicio_nombre, ts.descripcion as tipo_servicio_descripcion
+        `SELECT si.*, si.vehiculo_id, ts.nombre as tipo_servicio_nombre, ts.descripcion as tipo_servicio_descripcion
         FROM servicio_items si
         LEFT JOIN tipos_servicios ts ON si.tipo_servicio_id = ts.id
         WHERE si.servicio_id = ?
-        ORDER BY si.id`,
+        ORDER BY si.vehiculo_id, si.id`,
         [id],
       )
 
@@ -215,11 +216,39 @@ const serviciosController = {
         pagos = movimientosCaja
       }
 
+      // Vehículos del servicio (tabla servicio_vehiculos); si no hay, usar el vehículo principal del servicio
+      let vehiculos = []
+      try {
+        const [vehiculosRows] = await db.pool.execute(
+          `SELECT v.id, v.patente, v.marca, v.modelo, v.año
+           FROM servicio_vehiculos sv
+           JOIN vehiculos v ON sv.vehiculo_id = v.id
+           WHERE sv.servicio_id = ?
+           ORDER BY sv.id`,
+          [id],
+        )
+        vehiculos = vehiculosRows || []
+      } catch (_) {
+        // Tabla servicio_vehiculos puede no existir aún
+      }
+      if (vehiculos.length === 0 && servicios[0].vehiculo_id) {
+        vehiculos = [
+          {
+            id: servicios[0].vehiculo_id,
+            patente: servicios[0].patente,
+            marca: servicios[0].marca,
+            modelo: servicios[0].modelo,
+            año: servicios[0].año,
+          },
+        ]
+      }
+
       const servicio = {
         ...servicios[0],
         empleados,
         items,
         pagos,
+        vehiculos,
       }
 
       res.json(servicio)
@@ -237,6 +266,7 @@ const serviciosController = {
       const {
         cliente_id,
         vehiculo_id,
+        vehiculo_ids,
         sucursal_id,
         empleados,
         observaciones,
@@ -264,14 +294,21 @@ const serviciosController = {
         tasa_interes_tarjeta_2,
       } = req.body
 
+      // Normalizar a array de IDs de vehículos (soporta uno o varios)
+      const vehiculosIds = Array.isArray(vehiculo_ids) && vehiculo_ids.length > 0
+        ? vehiculo_ids.filter((id) => id != null)
+        : vehiculo_id != null
+          ? [vehiculo_id]
+          : []
+
       // Convertir pago_dividido a boolean (puede venir como string "true"/"false")
       const esPagoDividido = pago_dividido === true || pago_dividido === "true" || pago_dividido === 1
 
       if (!cliente_id) {
         return res.status(400).json({ error: "Cliente ID es requerido" })
       }
-      if (!vehiculo_id) {
-        return res.status(400).json({ error: "Vehículo ID es requerido" })
+      if (vehiculosIds.length === 0) {
+        return res.status(400).json({ error: "Al menos un vehículo es requerido" })
       }
       if (!sucursal_id) {
         return res.status(400).json({ error: "Sucursal ID es requerido" })
@@ -327,20 +364,20 @@ const serviciosController = {
 
       const itemsArray = Array.isArray(items) ? items : []
 
-      let calculatedSubtotal = subtotal || 0
-
+      // Subtotal de una "vuelta" de ítems (un vehículo); con N vehículos se multiplica
+      let oneSetSubtotal = subtotal || 0
       if (!subtotal || subtotal === 0) {
         for (const item of itemsArray) {
           if (item.productos && Array.isArray(item.productos)) {
             for (const prod of item.productos) {
-              calculatedSubtotal += Number.parseFloat(prod.precio_unitario || 0) * Number.parseFloat(prod.cantidad || 0)
+              oneSetSubtotal += Number.parseFloat(prod.precio_unitario || 0) * Number.parseFloat(prod.cantidad || 0)
             }
           } else {
-            calculatedSubtotal += Number.parseFloat(item.total || 0)
+            oneSetSubtotal += Number.parseFloat(item.total || 0)
           }
         }
       }
-
+      const calculatedSubtotal = oneSetSubtotal * vehiculosIds.length
       const finalSubtotal = calculatedSubtotal
       const descuentoNum = Number.parseFloat(descuento) || 0
 
@@ -409,7 +446,7 @@ const serviciosController = {
           [
             numero,
             cliente_id,
-            vehiculo_id,
+            vehiculosIds[0],
             sucursal_id,
             req.body.descripcion || "",
             observaciones || null,
@@ -448,7 +485,7 @@ const serviciosController = {
           [
             numero,
             cliente_id,
-            vehiculo_id,
+            vehiculosIds[0],
             sucursal_id,
             req.body.descripcion || "",
             observaciones || null,
@@ -471,6 +508,14 @@ const serviciosController = {
 
       const servicioId = result.insertId
 
+      // Registrar todos los vehículos del servicio (soporte multi-vehículo)
+      for (const vid of vehiculosIds) {
+        await connection.execute(
+          `INSERT INTO servicio_vehiculos (servicio_id, vehiculo_id) VALUES (?, ?)`,
+          [servicioId, vid],
+        )
+      }
+
       if (empleados && Array.isArray(empleados) && empleados.length > 0) {
         for (const empleadoId of empleados) {
           await connection.execute(`INSERT INTO servicio_empleados (servicio_id, empleado_id) VALUES (?, ?)`, [
@@ -480,80 +525,82 @@ const serviciosController = {
         }
       }
 
-      for (const item of itemsArray) {
-        let item_subtotal = 0
+      // Por cada vehículo se repiten los mismos ítems (mismo servicio para N vehículos)
+      for (const vehiculoId of vehiculosIds) {
+        for (const item of itemsArray) {
+          let item_subtotal = 0
 
-        if (item.productos && Array.isArray(item.productos) && item.productos.length > 0) {
-          for (const prod of item.productos) {
-            item_subtotal += Number.parseFloat(prod.precio_unitario || 0) * Number.parseFloat(prod.cantidad || 0)
-          }
-        } else {
-          item_subtotal = Number.parseFloat(item.total) || 0
-          if (isNaN(item_subtotal)) {
-            item_subtotal = 0
-          }
-        }
-
-        const [itemResult] = await connection.execute(
-          `INSERT INTO servicio_items (servicio_id, tipo_servicio_id, descripcion, observaciones, notas, subtotal)
-           VALUES (?, ?, ?, ?, ?, ?)`,
-          [
-            servicioId,
-            item.tipo_servicio_id,
-            item.descripcion || "Sin descripción",
-            item.observaciones || null,
-            item.notas || null,
-            Number(item_subtotal).toFixed(2),
-          ],
-        )
-
-        const servicioItemId = itemResult.insertId
-
-        if (item.productos && Array.isArray(item.productos)) {
-          for (const producto of item.productos) {
-            const cantidad = Number.parseFloat(producto.cantidad || 0)
-            const precio_unitario = Number.parseFloat(producto.precio_unitario || 0)
-            const producto_subtotal = precio_unitario * cantidad
-
-            const [productoData] = await connection.execute(
-              "SELECT stock, unidad_medida, nombre FROM productos WHERE id = ?",
-              [producto.producto_id],
-            )
-
-            if (productoData.length === 0) {
-              throw new Error(`Producto con ID ${producto.producto_id} no encontrado`)
+          if (item.productos && Array.isArray(item.productos) && item.productos.length > 0) {
+            for (const prod of item.productos) {
+              item_subtotal += Number.parseFloat(prod.precio_unitario || 0) * Number.parseFloat(prod.cantidad || 0)
             }
+          } else {
+            item_subtotal = Number.parseFloat(item.total) || 0
+            if (isNaN(item_subtotal)) {
+              item_subtotal = 0
+            }
+          }
 
-            const stockAnterior = Number.parseFloat(productoData[0].stock)
-            const stockNuevo = stockAnterior - cantidad
-            const unidad_medida = productoData[0].unidad_medida
+          const [itemResult] = await connection.execute(
+            `INSERT INTO servicio_items (servicio_id, vehiculo_id, tipo_servicio_id, descripcion, observaciones, notas, subtotal)
+             VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            [
+              servicioId,
+              vehiculoId,
+              item.tipo_servicio_id,
+              item.descripcion || "Sin descripción",
+              item.observaciones || null,
+              item.notas || null,
+              Number(item_subtotal).toFixed(2),
+            ],
+          )
 
-            // El stock puede quedar en negativo (permite usar/vender productos con stock 0, igual que en ventas)
+          const servicioItemId = itemResult.insertId
 
-            await connection.execute(
-              `INSERT INTO detalle_servicio_productos 
-               (servicio_item_id, producto_id, cantidad, unidad_medida, precio_unitario, subtotal)
-               VALUES (?, ?, ?, ?, ?, ?)`,
-              [servicioItemId, producto.producto_id, cantidad, unidad_medida, precio_unitario, producto_subtotal],
-            )
+          if (item.productos && Array.isArray(item.productos)) {
+            for (const producto of item.productos) {
+              const cantidad = Number.parseFloat(producto.cantidad || 0)
+              const precio_unitario = Number.parseFloat(producto.precio_unitario || 0)
+              const producto_subtotal = precio_unitario * cantidad
 
-            await connection.execute("UPDATE productos SET stock = ? WHERE id = ?", [stockNuevo, producto.producto_id])
+              const [productoData] = await connection.execute(
+                "SELECT stock, unidad_medida, nombre FROM productos WHERE id = ?",
+                [producto.producto_id],
+              )
 
-            await connection.execute(
-              `INSERT INTO movimientos_stock 
-               (producto_id, tipo, unidad_medida, cantidad, stock_anterior, stock_nuevo, motivo, referencia_tipo, referencia_id, usuario_id)
-               VALUES (?, 'SALIDA', ?, ?, ?, ?, ?, 'SERVICE', ?, ?)`,
-              [
-                producto.producto_id,
-                unidad_medida,
-                cantidad,
-                stockAnterior,
-                stockNuevo,
-                `Servicio #${numero}`,
-                servicioId,
-                usuario_id,
-              ],
-            )
+              if (productoData.length === 0) {
+                throw new Error(`Producto con ID ${producto.producto_id} no encontrado`)
+              }
+
+              const stockAnterior = Number.parseFloat(productoData[0].stock)
+              const stockNuevo = stockAnterior - cantidad
+              const unidad_medida = productoData[0].unidad_medida
+
+              await connection.execute(
+                `INSERT INTO detalle_servicio_productos 
+                 (servicio_item_id, producto_id, cantidad, unidad_medida, precio_unitario, subtotal)
+                 VALUES (?, ?, ?, ?, ?, ?)`,
+                [servicioItemId, producto.producto_id, cantidad, unidad_medida, precio_unitario, producto_subtotal],
+              )
+
+              await connection.execute("UPDATE productos SET stock = ? WHERE id = ?", [stockNuevo, producto.producto_id])
+
+              await connection.execute(
+                `INSERT INTO movimientos_stock 
+                 (producto_id, tipo, unidad_medida, cantidad, stock_anterior, stock_nuevo, motivo, referencia_tipo, referencia_id, usuario_id)
+                 VALUES (?, 'SALIDA', ?, ?, ?, ?, ?, 'SERVICE', ?, ?)`,
+                [
+                  producto.producto_id,
+                  unidad_medida,
+                  cantidad,
+                  stockAnterior,
+                  stockNuevo,
+                  `Servicio #${numero}`,
+                  servicioId,
+                  usuario_id,
+                ],
+              )
+            }
           }
         }
       }
@@ -823,6 +870,8 @@ const serviciosController = {
       await connection.execute("DELETE FROM servicio_items WHERE servicio_id = ?", [id])
 
       await connection.execute("DELETE FROM servicio_empleados WHERE servicio_id = ?", [id])
+
+      await connection.execute("DELETE FROM servicio_vehiculos WHERE servicio_id = ?", [id])
 
       await connection.execute("DELETE FROM servicios WHERE id = ?", [id])
 
