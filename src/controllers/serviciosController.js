@@ -384,8 +384,11 @@ const serviciosController = {
         totalFinalCaja = totalConInteresTarjetaFinal
       }
 
-      // Total a guardar: monto con interés de tarjeta cuando aplique (reportes y detalle usan este valor)
-      const totalAGuardar = totalConInteresTarjetaFinal ?? totalBase
+      // Total a guardar: en pago dividido es la suma de lo cobrado (con interés si aplica); si no, monto con interés de tarjeta o totalBase
+      const totalAGuardar = esPagoDividido && monto_pago_1 != null && monto_pago_2 != null
+        ? Number(monto_pago_1) + Number(monto_pago_2)
+        : (totalConInteresTarjetaFinal ?? totalBase)
+      const totalConInteresParaGuardar = esPagoDividido ? totalAGuardar : totalConInteresTarjetaFinal
 
       // Determinar el tipo de pago para guardar en la base de datos
       const tipoPagoFinal = esPagoDividido ? "PAGO_MULTIPLE" : tipo_pago_upper
@@ -417,7 +420,7 @@ const serviciosController = {
             Number(totalAGuardar).toFixed(2),
             Number(interesTarjetaPorcentaje).toFixed(2),
             Number(interesTarjetaMonto).toFixed(2),
-            totalConInteresTarjetaFinal ? Number(totalConInteresTarjetaFinal).toFixed(2) : null,
+            totalConInteresParaGuardar != null ? Number(totalConInteresParaGuardar).toFixed(2) : null,
             tipoPagoFinal,
             tarjeta_id || null,
             numero_cuotas || 1,
@@ -456,7 +459,7 @@ const serviciosController = {
             Number(totalAGuardar).toFixed(2),
             Number(interesTarjetaPorcentaje).toFixed(2),
             Number(interesTarjetaMonto).toFixed(2),
-            totalConInteresTarjetaFinal ? Number(totalConInteresTarjetaFinal).toFixed(2) : null,
+            totalConInteresParaGuardar != null ? Number(totalConInteresParaGuardar).toFixed(2) : null,
             tipo_pago_upper, // Usar el tipo_pago original si PAGO_MULTIPLE no está soportado
             tarjeta_id || null,
             numero_cuotas || 1,

@@ -367,13 +367,14 @@ const crearVenta = async (req, res) => {
     }
 
     // Determinar el tipo de pago para guardar en la base de datos
-    const tipoPagoFinal = esPagoDividido ? 'PAGO_MULTIPLE' : tipo_pago
+    const tipoPagoFinal = esPagoDividido ? "PAGO_MULTIPLE" : tipo_pago
     const tipoPago2Upper = tipo_pago_2 ? tipo_pago_2.toUpperCase() : null
 
-    // Total a guardar: monto con interés de tarjeta cuando aplique (reportes, caja y detalle usan este valor)
-    const totalAGuardar = totalConInteresTarjetaFinal ?? totalBase
-
-    console.log("[v0] Guardando venta con tipo_pago:", tipoPagoFinal, "esPagoDividido:", esPagoDividido)
+    // Total a guardar: en pago dividido es la suma de lo cobrado (con interés si aplica); si no, monto con interés de tarjeta o totalBase
+    const totalAGuardar = esPagoDividido && monto_pago_1 != null && monto_pago_2 != null
+      ? Number(monto_pago_1) + Number(monto_pago_2)
+      : (totalConInteresTarjetaFinal ?? totalBase)
+    const totalConInteresParaGuardar = esPagoDividido ? totalAGuardar : totalConInteresTarjetaFinal
 
     let ventaResult
     try {
@@ -400,7 +401,7 @@ const crearVenta = async (req, res) => {
           Number(totalAGuardar).toFixed(2),
           Number(interesTarjetaPorcentaje).toFixed(2),
           Number(interesTarjetaMonto).toFixed(2),
-          totalConInteresTarjetaFinal ? Number(totalConInteresTarjetaFinal).toFixed(2) : null,
+          totalConInteresParaGuardar != null ? Number(totalConInteresParaGuardar).toFixed(2) : null,
           "COMPLETADA",
           observaciones,
           usuario_id,
@@ -437,7 +438,7 @@ const crearVenta = async (req, res) => {
           Number(totalAGuardar).toFixed(2),
           Number(interesTarjetaPorcentaje).toFixed(2),
           Number(interesTarjetaMonto).toFixed(2),
-          totalConInteresTarjetaFinal ? Number(totalConInteresTarjetaFinal).toFixed(2) : null,
+          totalConInteresParaGuardar != null ? Number(totalConInteresParaGuardar).toFixed(2) : null,
           "COMPLETADA",
           observaciones,
           usuario_id,
