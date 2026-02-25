@@ -526,6 +526,14 @@ const crearVenta = async (req, res) => {
         ) VALUES (?, 'CARGO', ?, ?, ?, ?, 'VENTA', ?, ?)`,
         [cuentaCorriente[0].id, totalBase, saldoAnterior, saldoNuevo, `Venta ${numero}`, venta_id, usuario_id],
       )
+
+      await connection.execute(
+        `UPDATE sesiones_caja SET 
+          total_ventas_cuenta_corriente = COALESCE(total_ventas_cuenta_corriente, 0) + ?,
+          cantidad_ventas_cuenta_corriente = COALESCE(cantidad_ventas_cuenta_corriente, 0) + 1
+        WHERE id = ?`,
+        [totalBase, sesionCaja[0].id],
+      )
     } else {
       // Verificar si es pago dividido
       if (esPagoDividido && tipo_pago_2 && monto_pago_1 && monto_pago_2) {

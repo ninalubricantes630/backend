@@ -22,6 +22,7 @@ router.get("/historial", cajaController.obtenerHistorialSesiones)
 router.get("/sesiones/:id", cajaController.obtenerDetalleSesion)
 
 router.get("/sesiones/:id/detalle-ingresos", cajaController.obtenerDetalleIngresos)
+router.get("/sesiones/:id/cuenta-corriente-detalle", cajaController.obtenerCuentaCorrienteDetalle)
 
 // Obtener movimientos de una sesión
 router.get("/sesiones/:id/movimientos", cajaController.obtenerMovimientos)

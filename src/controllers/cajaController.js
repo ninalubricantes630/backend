@@ -618,6 +618,62 @@ const obtenerResumenCaja = async (req, res) => {
   }
 }
 
+// Detalle de ventas y servicios en cuenta corriente de una sesión (por qué fueron esos movimientos y a qué cliente)
+const obtenerCuentaCorrienteDetalle = async (req, res) => {
+  try {
+    const { id: sesionId } = req.params
+
+    const [sesiones] = await db.pool.execute("SELECT id FROM sesiones_caja WHERE id = ?", [sesionId])
+    if (sesiones.length === 0) {
+      return ResponseHelper.error(res, "Sesión no encontrada", 404)
+    }
+
+    const [ventas] = await db.pool.execute(
+      `SELECT v.id, v.numero, v.total, v.created_at,
+              c.nombre as cliente_nombre, c.apellido as cliente_apellido
+       FROM ventas v
+       LEFT JOIN clientes c ON v.cliente_id = c.id
+       WHERE v.sesion_caja_id = ? AND v.tipo_pago = 'CUENTA_CORRIENTE'
+       ORDER BY v.created_at ASC`,
+      [sesionId],
+    )
+
+    const [servicios] = await db.pool.execute(
+      `SELECT s.id, s.numero, s.total, s.created_at,
+              c.nombre as cliente_nombre, c.apellido as cliente_apellido
+       FROM servicios s
+       LEFT JOIN clientes c ON s.cliente_id = c.id
+       WHERE s.sesion_caja_id = ? AND s.tipo_pago = 'CUENTA_CORRIENTE'
+       ORDER BY s.created_at ASC`,
+      [sesionId],
+    )
+
+    return ResponseHelper.success(res, {
+      ventas: ventas.map((v) => ({
+        id: v.id,
+        numero: v.numero,
+        total: Number.parseFloat(v.total) || 0,
+        created_at: v.created_at,
+        cliente_nombre: v.cliente_nombre || "",
+        cliente_apellido: v.cliente_apellido || "",
+        cliente: [v.cliente_nombre, v.cliente_apellido].filter(Boolean).join(" ").trim() || "Sin cliente",
+      })),
+      servicios: servicios.map((s) => ({
+        id: s.id,
+        numero: s.numero,
+        total: Number.parseFloat(s.total) || 0,
+        created_at: s.created_at,
+        cliente_nombre: s.cliente_nombre || "",
+        cliente_apellido: s.cliente_apellido || "",
+        cliente: [s.cliente_nombre, s.cliente_apellido].filter(Boolean).join(" ").trim() || "Sin cliente",
+      })),
+    })
+  } catch (error) {
+    logger.error("Error al obtener detalle cuenta corriente:", error)
+    return ResponseHelper.error(res, "Error al obtener detalle de cuenta corriente", 500)
+  }
+}
+
 module.exports = {
   obtenerSesionActiva,
   abrirCaja,
@@ -627,5 +683,6 @@ module.exports = {
   registrarMovimiento,
   obtenerDetalleSesion,
   obtenerDetalleIngresos,
-  obtenerResumenCaja, // Exportando nueva función
+  obtenerResumenCaja,
+  obtenerCuentaCorrienteDetalle,
 }

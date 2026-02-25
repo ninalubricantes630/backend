@@ -678,6 +678,14 @@ const serviciosController = {
              VALUES (?, 'CARGO', ?, ?, ?, ?, 'SERVICE', ?, ?)`,
             [cuenta_id, totalBase, saldo_anterior, saldo_nuevo, `Servicio #${numero}`, servicioId, usuario_id],
           )
+
+          await connection.execute(
+            `UPDATE sesiones_caja SET 
+              total_servicios_cuenta_corriente = COALESCE(total_servicios_cuenta_corriente, 0) + ?,
+              cantidad_servicios_cuenta_corriente = COALESCE(cantidad_servicios_cuenta_corriente, 0) + 1
+            WHERE id = ?`,
+            [totalBase, sesion_caja_id],
+          )
         }
       }
 
