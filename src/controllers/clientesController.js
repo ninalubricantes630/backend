@@ -5,9 +5,31 @@ const clientesController = {
   // Obtener todos los clientes con paginación y filtros
   getClientes: async (req, res) => {
     try {
-      let { page = 1, limit = 10, search = "", searchBy = "", sucursal_id = "", sucursales_ids = "" } = req.query
+      let {
+        page = 1,
+        limit = 10,
+        search = "",
+        searchBy = "",
+        sucursal_id = "",
+        sucursales_ids = "",
+        con_saldo_cc = "",
+      } = req.query
 
-      console.log("[v0] getClientes params:", { page, limit, search, searchBy, sucursal_id, sucursales_ids })
+      const soloConSaldoCuentaCorriente =
+        con_saldo_cc === true ||
+        con_saldo_cc === "true" ||
+        con_saldo_cc === "1" ||
+        String(con_saldo_cc).toLowerCase() === "yes"
+
+      console.log("[v0] getClientes params:", {
+        page,
+        limit,
+        search,
+        searchBy,
+        sucursal_id,
+        sucursales_ids,
+        con_saldo_cc: soloConSaldoCuentaCorriente,
+      })
 
       page = Number.parseInt(page, 10) || 1
       limit = Number.parseInt(limit, 10) || 10
@@ -67,6 +89,18 @@ const clientesController = {
         countQuery += ` AND (c.sucursal_id IN (${placeholders}) OR c.sucursal_id IS NULL)`
         queryParams.push(...idsArray)
         countParams.push(...idsArray)
+      }
+
+      if (soloConSaldoCuentaCorriente) {
+        const saldoCcClause = ` AND EXISTS (
+          SELECT 1 FROM cuentas_corrientes cc_f
+          WHERE cc_f.cliente_id = c.id
+            AND cc_f.activo = 1
+            AND cc_f.saldo IS NOT NULL
+            AND CAST(cc_f.saldo AS DECIMAL(14,4)) != 0
+        )`
+        query += saldoCcClause
+        countQuery += saldoCcClause
       }
 
       if (search) {
