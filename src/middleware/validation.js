@@ -1,6 +1,11 @@
 const { body, param, query, validationResult } = require("express-validator")
 const ResponseHelper = require("../utils/responseHelper")
 
+// Letras Unicode (incl. tildes), marcas combinadas, números, espacios y . ' -
+const CLIENTE_NOMBRE_APELLIDO_REGEX = /^[\p{L}\p{M}\p{N}\s.'-]+$/u
+const MSG_CLIENTE_NOMBRE_CARACTERES =
+  "Use solo letras, números, espacios y los signos . ' - (no se permiten símbolos como @, #, < o /)"
+
 const handleValidationErrors = (req, res, next) => {
   const errors = validationResult(req)
   if (!errors.isEmpty()) {
@@ -53,20 +58,25 @@ const validateChangePassword = [
 ]
 
 const validateCliente = [
-  body("nombre").trim().isLength({ min: 2, max: 100 }).withMessage("El nombre debe tener entre 2 y 100 caracteres"),
+  body("nombre")
+    .trim()
+    .isLength({ min: 2, max: 100 })
+    .withMessage("El nombre debe tener entre 2 y 100 caracteres")
+    .matches(CLIENTE_NOMBRE_APELLIDO_REGEX)
+    .withMessage(`Nombre: ${MSG_CLIENTE_NOMBRE_CARACTERES}`),
   body("apellido")
     .trim()
     .isLength({ min: 2, max: 100 })
     .withMessage("El apellido debe tener entre 2 y 100 caracteres")
-    .matches(/^[a-zA-ZáéíóúÁÉÍÓÚñÑ\s]+$/)
-    .withMessage("El apellido solo puede contener letras y espacios"),
+    .matches(CLIENTE_NOMBRE_APELLIDO_REGEX)
+    .withMessage(`Apellido: ${MSG_CLIENTE_NOMBRE_CARACTERES}`),
   body("dni")
     .optional({ checkFalsy: true })
     .trim()
     .isLength({ min: 7, max: 8 })
-    .withMessage("El DNI debe tener entre 7 y 8 dígitos")
+    .withMessage("El DNI debe tener exactamente 7 u 8 dígitos (sin puntos ni espacios)")
     .matches(/^[0-9]+$/)
-    .withMessage("El DNI solo puede contener números"),
+    .withMessage("El DNI solo puede contener números del 0 al 9 (sin letras ni símbolos)"),
   body("telefono")
     .optional({ checkFalsy: true })
     .trim()

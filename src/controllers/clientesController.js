@@ -239,15 +239,39 @@ const clientesController = {
       const { nombre, apellido, dni, telefono, direccion, tiene_cuenta_corriente, limite_credito, sucursal_id } =
         req.body
 
+      const nombreTrim = String(nombre ?? "").trim()
+      const apellidoTrim = String(apellido ?? "").trim()
+
       if (dni) {
-        const [existingCliente] = await connection.execute("SELECT id FROM clientes WHERE dni = ? AND activo = true", [
+        const [existingCliente] = await connection.execute("SELECT id, nombre, apellido FROM clientes WHERE dni = ? AND activo = true", [
           dni,
         ])
         if (existingCliente.length > 0) {
           await connection.rollback()
-          connection.release()
-          return ResponseHelper.error(res, "Ya existe un cliente con ese DNI", 400, "DUPLICATE_DNI")
+          const otro = existingCliente[0]
+          return ResponseHelper.conflict(
+            res,
+            `Ya existe un cliente activo con el DNI ${dni} (${otro.nombre} ${otro.apellido}, ID ${otro.id}). Revise el número o edite ese registro.`,
+            "DUPLICATE_DNI",
+          )
         }
+      }
+
+      const [dupNombreApellido] = await connection.execute(
+        `SELECT id, nombre, apellido FROM clientes 
+         WHERE activo = true 
+         AND LOWER(TRIM(nombre)) = LOWER(?) 
+         AND LOWER(TRIM(apellido)) = LOWER(?)`,
+        [nombreTrim, apellidoTrim],
+      )
+      if (dupNombreApellido.length > 0) {
+        await connection.rollback()
+        const d = dupNombreApellido[0]
+        return ResponseHelper.conflict(
+          res,
+          `Ya existe un cliente activo con el mismo nombre y apellido (${d.nombre} ${d.apellido}, ID ${d.id}). Si es otra persona, modifique nombre o apellido para diferenciarlo.`,
+          "DUPLICATE_CLIENTE_NOMBRE",
+        )
       }
 
       if (sucursal_id) {
@@ -256,7 +280,6 @@ const clientesController = {
         ])
         if (sucursales.length === 0) {
           await connection.rollback()
-          connection.release()
           return ResponseHelper.error(res, "Sucursal no encontrada o inactiva", 400, "SUCURSAL_NOT_FOUND")
         }
       }
@@ -264,7 +287,7 @@ const clientesController = {
       const [result] = await connection.execute(
         `INSERT INTO clientes (nombre, apellido, dni, telefono, direccion, sucursal_id, activo) 
          VALUES (?, ?, ?, ?, ?, ?, true)`,
-        [nombre, apellido, dni || null, telefono || null, direccion || null, sucursal_id || null],
+        [nombreTrim, apellidoTrim, dni || null, telefono || null, direccion || null, sucursal_id || null],
       )
 
       const clienteId = result.insertId
@@ -323,6 +346,13 @@ const clientesController = {
     } catch (error) {
       await connection.rollback()
       console.error("[v0] Error al crear cliente:", error)
+      if (error.code === "ER_DUP_ENTRY") {
+        return ResponseHelper.conflict(
+          res,
+          "No se pudo guardar: ya existe otro registro con un dato único duplicado (por ejemplo DNI). Revise los datos ingresados.",
+          "DUPLICATE_DB_ENTRY",
+        )
+      }
       return ResponseHelper.error(res, "Error al crear cliente", 500, "DATABASE_ERROR", error)
     } finally {
       connection.release()
@@ -339,23 +369,46 @@ const clientesController = {
       const { nombre, apellido, dni, telefono, direccion, tiene_cuenta_corriente, limite_credito, sucursal_id } =
         req.body
 
+      const nombreTrim = String(nombre ?? "").trim()
+      const apellidoTrim = String(apellido ?? "").trim()
+
       const [existingCliente] = await connection.execute("SELECT id FROM clientes WHERE id = ? AND activo = true", [id])
       if (existingCliente.length === 0) {
         await connection.rollback()
-        connection.release()
         return ResponseHelper.notFound(res, "Cliente no encontrado", "CLIENT_NOT_FOUND")
       }
 
       if (dni) {
         const [duplicateCliente] = await connection.execute(
-          "SELECT id FROM clientes WHERE dni = ? AND id != ? AND activo = true",
+          "SELECT id, nombre, apellido FROM clientes WHERE dni = ? AND id != ? AND activo = true",
           [dni, id],
         )
         if (duplicateCliente.length > 0) {
           await connection.rollback()
-          connection.release()
-          return ResponseHelper.error(res, "Ya existe otro cliente con ese DNI", 400, "DUPLICATE_DNI")
+          const otro = duplicateCliente[0]
+          return ResponseHelper.conflict(
+            res,
+            `Ya existe otro cliente activo con el DNI ${dni} (${otro.nombre} ${otro.apellido}, ID ${otro.id}). Use otro DNI o edite ese cliente.`,
+            "DUPLICATE_DNI",
+          )
         }
+      }
+
+      const [dupNombreApellido] = await connection.execute(
+        `SELECT id, nombre, apellido FROM clientes 
+         WHERE activo = true AND id != ?
+         AND LOWER(TRIM(nombre)) = LOWER(?) 
+         AND LOWER(TRIM(apellido)) = LOWER(?)`,
+        [id, nombreTrim, apellidoTrim],
+      )
+      if (dupNombreApellido.length > 0) {
+        await connection.rollback()
+        const d = dupNombreApellido[0]
+        return ResponseHelper.conflict(
+          res,
+          `Ya existe otro cliente activo con el mismo nombre y apellido (${d.nombre} ${d.apellido}, ID ${d.id}). Modifique nombre o apellido para diferenciarlo.`,
+          "DUPLICATE_CLIENTE_NOMBRE",
+        )
       }
 
       if (sucursal_id) {
@@ -364,7 +417,6 @@ const clientesController = {
         ])
         if (sucursales.length === 0) {
           await connection.rollback()
-          connection.release()
           return ResponseHelper.error(res, "Sucursal no encontrada o inactiva", 400, "SUCURSAL_NOT_FOUND")
         }
       }
@@ -373,7 +425,7 @@ const clientesController = {
         `UPDATE clientes 
          SET nombre = ?, apellido = ?, dni = ?, telefono = ?, direccion = ?, sucursal_id = ?, updated_at = NOW()
          WHERE id = ?`,
-        [nombre, apellido, dni || null, telefono || null, direccion || null, sucursal_id || null, id],
+        [nombreTrim, apellidoTrim, dni || null, telefono || null, direccion || null, sucursal_id || null, id],
       )
 
       const [cuentaExistente] = await connection.execute("SELECT * FROM cuentas_corrientes WHERE cliente_id = ?", [id])
@@ -403,7 +455,6 @@ const clientesController = {
         // Verificar que no tenga saldo pendiente antes de desactivar
         if (Number.parseFloat(cuentaExistente[0].saldo) > 0) {
           await connection.rollback()
-          connection.release()
           return ResponseHelper.error(
             res,
             "No se puede desactivar la cuenta corriente porque tiene saldo pendiente",
@@ -444,6 +495,13 @@ const clientesController = {
     } catch (error) {
       await connection.rollback()
       console.error("[v0] Error al actualizar cliente:", error)
+      if (error.code === "ER_DUP_ENTRY") {
+        return ResponseHelper.conflict(
+          res,
+          "No se pudo guardar: ya existe otro registro con un dato único duplicado (por ejemplo DNI). Revise los datos ingresados.",
+          "DUPLICATE_DB_ENTRY",
+        )
+      }
       return ResponseHelper.error(res, "Error al actualizar cliente", 500, "DATABASE_ERROR", error)
     } finally {
       connection.release()
