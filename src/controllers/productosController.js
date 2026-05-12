@@ -4,20 +4,37 @@ const logger = require("../config/logger")
 const importHelper = require("../utils/importHelper")
 const XLSX = require("xlsx")
 
-/** Orden inteligente cuando hay texto de búsqueda: prefijo y código exacto antes que coincidencias al medio (ej. "5" antes que "15"). */
-const ORDER_BY_PRODUCTO_RELEVANCIA = `
+/** Búsqueda por nombre (default): solo nombre y descripción en el filtro; orden por relevancia en esos campos. */
+const ORDER_BY_RELEVANCIA_NOMBRE = `
+    CASE
+      WHEN LOWER(TRIM(COALESCE(p.nombre, ''))) = LOWER(?) THEN 0
+      WHEN LOWER(p.nombre) LIKE LOWER(CONCAT(?, '%')) THEN 1
+      WHEN LOWER(COALESCE(p.descripcion, '')) LIKE LOWER(CONCAT(?, '%')) THEN 2
+      ELSE 3
+    END,
+    CHAR_LENGTH(COALESCE(p.nombre, '')) ASC,
+    p.nombre ASC`
+
+/** Búsqueda explícita por código: orden por coincidencia en código. */
+const ORDER_BY_RELEVANCIA_CODIGO = `
     CASE
       WHEN LOWER(TRIM(COALESCE(p.codigo, ''))) = LOWER(?) THEN 0
       WHEN LOWER(p.codigo) LIKE LOWER(CONCAT(?, '%')) THEN 1
-      WHEN LOWER(p.nombre) LIKE LOWER(CONCAT(?, '%')) THEN 2
-      WHEN LOWER(COALESCE(p.fabricante, '')) LIKE LOWER(CONCAT(?, '%')) THEN 3
-      ELSE 4
+      ELSE 2
     END,
     CHAR_LENGTH(COALESCE(p.codigo, '')) ASC,
     p.nombre ASC`
 
-const pushParamsOrdenRelevancia = (params, searchTrimmed) => {
-  params.push(searchTrimmed, searchTrimmed, searchTrimmed, searchTrimmed)
+const pushParamsOrdenRelevanciaNombre = (params, searchTrimmed) => {
+  params.push(searchTrimmed, searchTrimmed, searchTrimmed)
+}
+
+const pushParamsOrdenRelevanciaCodigo = (params, searchTrimmed) => {
+  params.push(searchTrimmed, searchTrimmed)
+}
+
+function busquedaProductosPorCodigo(search_mode) {
+  return typeof search_mode === "string" && search_mode.trim().toLowerCase() === "codigo"
 }
 
 /** prioridad_sucursal_id solo aplica si está incluida en sucursal_id o en sucursales_ids (evita ordenar por sucursal ajena). */
@@ -52,7 +69,10 @@ const productosController = {
         limit = 10,
         offset: offsetParam = 0,
         prioridad_sucursal_id: prioridadSucursalIdRaw,
+        search_mode: searchModeRaw,
       } = req.query
+
+      const buscarPorCodigo = busquedaProductosPorCodigo(searchModeRaw)
 
       const prioridadParsed = Number.parseInt(
         prioridadSucursalIdRaw !== undefined && prioridadSucursalIdRaw !== null && prioridadSucursalIdRaw !== ""
@@ -78,13 +98,20 @@ const productosController = {
 
       const searchTrimmed = typeof search === "string" ? search.trim() : ""
 
-      // Filtro de búsqueda
+      // Filtro de búsqueda: por defecto nombre+descripción; con search_mode=codigo solo código
       if (searchTrimmed) {
-        query += " AND (p.nombre LIKE ? OR p.descripcion LIKE ? OR p.codigo LIKE ? OR p.fabricante LIKE ?)"
-        countQuery += " AND (p.nombre LIKE ? OR p.descripcion LIKE ? OR p.codigo LIKE ? OR p.fabricante LIKE ?)"
         const searchParam = `%${searchTrimmed}%`
-        queryParams.push(searchParam, searchParam, searchParam, searchParam)
-        countParams.push(searchParam, searchParam, searchParam, searchParam)
+        if (buscarPorCodigo) {
+          query += " AND p.codigo LIKE ?"
+          countQuery += " AND p.codigo LIKE ?"
+          queryParams.push(searchParam)
+          countParams.push(searchParam)
+        } else {
+          query += " AND (p.nombre LIKE ? OR p.descripcion LIKE ?)"
+          countQuery += " AND (p.nombre LIKE ? OR p.descripcion LIKE ?)"
+          queryParams.push(searchParam, searchParam)
+          countParams.push(searchParam, searchParam)
+        }
       }
 
       // Filtro por categoría
@@ -148,7 +175,9 @@ const productosController = {
         orderFragments.push("CASE WHEN p.sucursal_id = ? THEN 0 ELSE 1 END")
       }
       if (searchTrimmed) {
-        orderFragments.push(ORDER_BY_PRODUCTO_RELEVANCIA.trim())
+        orderFragments.push(
+          (buscarPorCodigo ? ORDER_BY_RELEVANCIA_CODIGO : ORDER_BY_RELEVANCIA_NOMBRE).trim(),
+        )
       } else {
         orderFragments.push("p.created_at DESC")
       }
@@ -159,7 +188,11 @@ const productosController = {
         queryParams.push(prioridadParsed)
       }
       if (searchTrimmed) {
-        pushParamsOrdenRelevancia(queryParams, searchTrimmed)
+        if (buscarPorCodigo) {
+          pushParamsOrdenRelevanciaCodigo(queryParams, searchTrimmed)
+        } else {
+          pushParamsOrdenRelevanciaNombre(queryParams, searchTrimmed)
+        }
       }
 
       console.log("[v0] Query:", query.substring(0, 100) + "...", "Params count:", queryParams.length)
@@ -724,9 +757,19 @@ const productosController = {
   exportarProductosExcel: async (req, res) => {
     try {
       console.log("[v0] Iniciando exportación de productos a Excel")
-      const { search, categoria_id, unidad_medida, precio_min, precio_max, sucursal_id, sucursales_ids } = req.query
+      const {
+        search,
+        categoria_id,
+        unidad_medida,
+        precio_min,
+        precio_max,
+        sucursal_id,
+        sucursales_ids,
+        search_mode: searchModeRaw,
+      } = req.query
 
       const searchTrimmed = typeof search === "string" ? search.trim() : ""
+      const buscarPorCodigo = busquedaProductosPorCodigo(searchModeRaw)
 
       let query = `
         SELECT 
@@ -752,9 +795,14 @@ const productosController = {
 
       // Aplicar los mismos filtros que en getProductos
       if (searchTrimmed) {
-        query += " AND (p.nombre LIKE ? OR p.descripcion LIKE ? OR p.codigo LIKE ? OR p.fabricante LIKE ?)"
         const searchParam = `%${searchTrimmed}%`
-        queryParams.push(searchParam, searchParam, searchParam, searchParam)
+        if (buscarPorCodigo) {
+          query += " AND p.codigo LIKE ?"
+          queryParams.push(searchParam)
+        } else {
+          query += " AND (p.nombre LIKE ? OR p.descripcion LIKE ?)"
+          queryParams.push(searchParam, searchParam)
+        }
       }
 
       if (categoria_id) {
@@ -794,8 +842,12 @@ const productosController = {
       }
 
       if (searchTrimmed) {
-        query += ` ORDER BY ${ORDER_BY_PRODUCTO_RELEVANCIA}`
-        pushParamsOrdenRelevancia(queryParams, searchTrimmed)
+        query += ` ORDER BY ${(buscarPorCodigo ? ORDER_BY_RELEVANCIA_CODIGO : ORDER_BY_RELEVANCIA_NOMBRE).trim()}`
+        if (buscarPorCodigo) {
+          pushParamsOrdenRelevanciaCodigo(queryParams, searchTrimmed)
+        } else {
+          pushParamsOrdenRelevanciaNombre(queryParams, searchTrimmed)
+        }
       } else {
         query += " ORDER BY p.created_at DESC"
       }
