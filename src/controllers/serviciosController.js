@@ -1059,11 +1059,12 @@ const serviciosController = {
 
       if (servicio[0].tipo_pago !== "CUENTA_CORRIENTE") {
         // Si es pago múltiple, obtener los movimientos originales y crear egresos correspondientes
-        if (servicio[0].pago_dividido) {
+        if (Number(servicio[0].pago_dividido) === 1) {
           const [movimientosOriginales] = await connection.execute(
             `SELECT id, metodo_pago, monto 
              FROM movimientos_caja 
-             WHERE referencia_tipo = 'SERVICE' AND referencia_id = ? AND tipo = 'INGRESO' AND estado = 'ACTIVO'`,
+             WHERE referencia_tipo = 'SERVICE' AND referencia_id = ? AND tipo = 'INGRESO' 
+               AND (estado = 'ACTIVO' OR estado IS NULL)`,
             [id],
           )
 
@@ -1091,7 +1092,7 @@ const serviciosController = {
             )
           }
         } else {
-          // Pago simple - comportamiento original
+          // Pago simple - egreso de devolución y marcar el ingreso original como cancelado (misma lógica que ventas)
           const montoDevolucion =
             servicio[0].total_con_interes_tarjeta && servicio[0].total_con_interes_tarjeta !== servicio[0].total
               ? servicio[0].total_con_interes_tarjeta
@@ -1111,6 +1112,19 @@ const serviciosController = {
               motivo || "Servicio cancelado",
             ],
           )
+
+          const [ingresoServicio] = await connection.execute(
+            `SELECT id FROM movimientos_caja 
+             WHERE sesion_caja_id = ? AND referencia_tipo = 'SERVICE' AND referencia_id = ? 
+               AND tipo = 'INGRESO' AND (estado = 'ACTIVO' OR estado IS NULL)
+             ORDER BY id ASC LIMIT 1`,
+            [servicio[0].sesion_caja_id, id],
+          )
+          if (ingresoServicio.length > 0) {
+            await connection.execute(`UPDATE movimientos_caja SET estado = 'CANCELADO' WHERE id = ?`, [
+              ingresoServicio[0].id,
+            ])
+          }
         }
       }
 
@@ -1145,6 +1159,16 @@ const serviciosController = {
               motivo || "Servicio cancelado",
             ],
           )
+
+          if (servicio[0].sesion_caja_id) {
+            await connection.execute(
+              `UPDATE sesiones_caja SET 
+                total_servicios_cuenta_corriente = GREATEST(COALESCE(total_servicios_cuenta_corriente, 0) - ?, 0),
+                cantidad_servicios_cuenta_corriente = GREATEST(COALESCE(cantidad_servicios_cuenta_corriente, 0) - 1, 0)
+               WHERE id = ?`,
+              [montoServicio, servicio[0].sesion_caja_id],
+            )
+          }
         }
       }
 
