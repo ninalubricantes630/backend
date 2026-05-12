@@ -20,6 +20,22 @@ const pushParamsOrdenRelevancia = (params, searchTrimmed) => {
   params.push(searchTrimmed, searchTrimmed, searchTrimmed, searchTrimmed)
 }
 
+/** prioridad_sucursal_id solo aplica si está incluida en sucursal_id o en sucursales_ids (evita ordenar por sucursal ajena). */
+function prioridadSucursalEsPermitida(prioridadId, sucursal_id, sucursales_ids) {
+  if (!Number.isInteger(prioridadId) || prioridadId < 1) return false
+  if (sucursal_id !== undefined && sucursal_id !== null && String(sucursal_id).trim() !== "") {
+    return String(sucursal_id) === String(prioridadId)
+  }
+  if (sucursales_ids !== undefined && sucursales_ids !== null && String(sucursales_ids).trim() !== "") {
+    const arr = String(sucursales_ids)
+      .split(",")
+      .map((x) => x.trim())
+      .filter(Boolean)
+    return arr.includes(String(prioridadId))
+  }
+  return false
+}
+
 const productosController = {
   // Obtener todos los productos con filtros y paginación
   getProductos: async (req, res) => {
@@ -35,7 +51,19 @@ const productosController = {
         page = 1,
         limit = 10,
         offset: offsetParam = 0,
+        prioridad_sucursal_id: prioridadSucursalIdRaw,
       } = req.query
+
+      const prioridadParsed = Number.parseInt(
+        prioridadSucursalIdRaw !== undefined && prioridadSucursalIdRaw !== null && prioridadSucursalIdRaw !== ""
+          ? String(prioridadSucursalIdRaw)
+          : "",
+        10,
+      )
+      const usarPrioridadSucursal =
+        Number.isInteger(prioridadParsed) &&
+        prioridadParsed > 0 &&
+        prioridadSucursalEsPermitida(prioridadParsed, sucursal_id, sucursales_ids)
 
       let query = `
         SELECT p.*, c.nombre as categoria_nombre, s.nombre as sucursal_nombre
@@ -115,11 +143,23 @@ const productosController = {
         Number.parseInt(offsetParam) || Number.parseInt(page > 1 ? (page - 1) * limitNum : 0) || 0,
       )
 
+      const orderFragments = []
+      if (usarPrioridadSucursal) {
+        orderFragments.push("CASE WHEN p.sucursal_id = ? THEN 0 ELSE 1 END")
+      }
       if (searchTrimmed) {
-        query += ` ORDER BY ${ORDER_BY_PRODUCTO_RELEVANCIA} LIMIT ${limitNum} OFFSET ${offsetNum}`
-        pushParamsOrdenRelevancia(queryParams, searchTrimmed)
+        orderFragments.push(ORDER_BY_PRODUCTO_RELEVANCIA.trim())
       } else {
-        query += ` ORDER BY p.created_at DESC LIMIT ${limitNum} OFFSET ${offsetNum}`
+        orderFragments.push("p.created_at DESC")
+      }
+
+      query += ` ORDER BY ${orderFragments.join(", ")} LIMIT ${limitNum} OFFSET ${offsetNum}`
+
+      if (usarPrioridadSucursal) {
+        queryParams.push(prioridadParsed)
+      }
+      if (searchTrimmed) {
+        pushParamsOrdenRelevancia(queryParams, searchTrimmed)
       }
 
       console.log("[v0] Query:", query.substring(0, 100) + "...", "Params count:", queryParams.length)
