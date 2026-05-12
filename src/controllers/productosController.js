@@ -4,6 +4,22 @@ const logger = require("../config/logger")
 const importHelper = require("../utils/importHelper")
 const XLSX = require("xlsx")
 
+/** Orden inteligente cuando hay texto de búsqueda: prefijo y código exacto antes que coincidencias al medio (ej. "5" antes que "15"). */
+const ORDER_BY_PRODUCTO_RELEVANCIA = `
+    CASE
+      WHEN LOWER(TRIM(COALESCE(p.codigo, ''))) = LOWER(?) THEN 0
+      WHEN LOWER(p.codigo) LIKE LOWER(CONCAT(?, '%')) THEN 1
+      WHEN LOWER(p.nombre) LIKE LOWER(CONCAT(?, '%')) THEN 2
+      WHEN LOWER(COALESCE(p.fabricante, '')) LIKE LOWER(CONCAT(?, '%')) THEN 3
+      ELSE 4
+    END,
+    CHAR_LENGTH(COALESCE(p.codigo, '')) ASC,
+    p.nombre ASC`
+
+const pushParamsOrdenRelevancia = (params, searchTrimmed) => {
+  params.push(searchTrimmed, searchTrimmed, searchTrimmed, searchTrimmed)
+}
+
 const productosController = {
   // Obtener todos los productos con filtros y paginación
   getProductos: async (req, res) => {
@@ -32,11 +48,13 @@ const productosController = {
       const queryParams = []
       const countParams = []
 
+      const searchTrimmed = typeof search === "string" ? search.trim() : ""
+
       // Filtro de búsqueda
-      if (search) {
+      if (searchTrimmed) {
         query += " AND (p.nombre LIKE ? OR p.descripcion LIKE ? OR p.codigo LIKE ? OR p.fabricante LIKE ?)"
         countQuery += " AND (p.nombre LIKE ? OR p.descripcion LIKE ? OR p.codigo LIKE ? OR p.fabricante LIKE ?)"
-        const searchParam = `%${search}%`
+        const searchParam = `%${searchTrimmed}%`
         queryParams.push(searchParam, searchParam, searchParam, searchParam)
         countParams.push(searchParam, searchParam, searchParam, searchParam)
       }
@@ -97,7 +115,12 @@ const productosController = {
         Number.parseInt(offsetParam) || Number.parseInt(page > 1 ? (page - 1) * limitNum : 0) || 0,
       )
 
-      query += ` ORDER BY p.created_at DESC LIMIT ${limitNum} OFFSET ${offsetNum}`
+      if (searchTrimmed) {
+        query += ` ORDER BY ${ORDER_BY_PRODUCTO_RELEVANCIA} LIMIT ${limitNum} OFFSET ${offsetNum}`
+        pushParamsOrdenRelevancia(queryParams, searchTrimmed)
+      } else {
+        query += ` ORDER BY p.created_at DESC LIMIT ${limitNum} OFFSET ${offsetNum}`
+      }
 
       console.log("[v0] Query:", query.substring(0, 100) + "...", "Params count:", queryParams.length)
 
@@ -663,6 +686,8 @@ const productosController = {
       console.log("[v0] Iniciando exportación de productos a Excel")
       const { search, categoria_id, unidad_medida, precio_min, precio_max, sucursal_id, sucursales_ids } = req.query
 
+      const searchTrimmed = typeof search === "string" ? search.trim() : ""
+
       let query = `
         SELECT 
           p.id,
@@ -686,9 +711,9 @@ const productosController = {
       const queryParams = []
 
       // Aplicar los mismos filtros que en getProductos
-      if (search) {
+      if (searchTrimmed) {
         query += " AND (p.nombre LIKE ? OR p.descripcion LIKE ? OR p.codigo LIKE ? OR p.fabricante LIKE ?)"
-        const searchParam = `%${search}%`
+        const searchParam = `%${searchTrimmed}%`
         queryParams.push(searchParam, searchParam, searchParam, searchParam)
       }
 
@@ -728,7 +753,12 @@ const productosController = {
         queryParams.push(sucursal_id)
       }
 
-      query += " ORDER BY p.created_at DESC"
+      if (searchTrimmed) {
+        query += ` ORDER BY ${ORDER_BY_PRODUCTO_RELEVANCIA}`
+        pushParamsOrdenRelevancia(queryParams, searchTrimmed)
+      } else {
+        query += " ORDER BY p.created_at DESC"
+      }
 
       console.log("[v0] Ejecutando consulta SQL")
       const [productos] = await db.pool.execute(query, queryParams)
