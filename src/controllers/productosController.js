@@ -928,7 +928,7 @@ const productosController = {
         message: "Error al exportar productos a Excel",
         error: error.message,
       })
-    }
+    }                                                     
   },
 }
 

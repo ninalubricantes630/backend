@@ -925,8 +925,9 @@ const cancelarVenta = async (req, res) => {
             saldo_nuevo, 
             descripcion, 
             referencia_tipo, 
-            referencia_id
-          ) VALUES (?, 'AJUSTE', ?, ?, ?, ?, 'VENTA', ?)`,
+            referencia_id,
+            usuario_id
+          ) VALUES (?, 'AJUSTE', ?, ?, ?, ?, 'VENTA', ?, ?, ?)`,
           [
             cuentaCorriente[0].id,
             montoParaRestar,
@@ -934,7 +935,16 @@ const cancelarVenta = async (req, res) => {
             saldoNuevo,
             `Cancelación venta ${venta[0].numero}`,
             id,
+            usuario_id,
           ],
+        )
+
+        await connection.execute(
+          `UPDATE sesiones_caja SET 
+            total_ventas_cuenta_corriente = GREATEST(COALESCE(total_ventas_cuenta_corriente, 0) - ?, 0),
+            cantidad_ventas_cuenta_corriente = GREATEST(COALESCE(cantidad_ventas_cuenta_corriente, 0) - 1, 0)
+           WHERE id = ?`,
+          [montoParaRestar, venta[0].sesion_caja_id],
         )
       }
     }
@@ -1006,6 +1016,19 @@ const cancelarVenta = async (req, res) => {
             motivo || "Venta cancelada",
           ],
         )
+
+        const [ingresoVenta] = await connection.execute(
+          `SELECT id FROM movimientos_caja 
+           WHERE sesion_caja_id = ? AND referencia_tipo = 'VENTA' AND referencia_id = ? 
+             AND tipo = 'INGRESO' AND estado = 'ACTIVO'
+           ORDER BY id ASC LIMIT 1`,
+          [venta[0].sesion_caja_id, id],
+        )
+        if (ingresoVenta.length > 0) {
+          await connection.execute(`UPDATE movimientos_caja SET estado = 'CANCELADO' WHERE id = ?`, [
+            ingresoVenta[0].id,
+          ])
+        }
       }
     }
 

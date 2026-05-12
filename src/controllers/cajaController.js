@@ -372,7 +372,7 @@ const obtenerMovimientos = async (req, res) => {
         SUM(CASE WHEN tipo = 'EGRESO' THEN monto ELSE 0 END) as total_egresos,
         COUNT(*) as total_movimientos
       FROM movimientos_caja 
-      WHERE sesion_caja_id = ?`,
+      WHERE sesion_caja_id = ? AND (estado = 'ACTIVO' OR estado IS NULL)`,
       [sesionId],
     )
 
