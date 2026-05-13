@@ -167,6 +167,7 @@ app.use("/api/productos", require("./src/routes/productosRoutes"))
 app.use("/api/movimientos-stock", require("./src/routes/movimientosStockRoutes"))
 app.use("/api/categorias", require("./src/routes/categoriasRoutes")) // Agregando ruta de categorías
 app.use("/api/ventas", require("./src/routes/ventasRoutes"))
+app.use("/api/reportes", require("./src/routes/reportesRoutes"))
 app.use("/api/cuentas-corrientes", require("./src/routes/cuentasCorrientesRoutes"))
 app.use("/api/caja", require("./src/routes/cajaRoutes"))
 app.use("/api/tarjetas", require("./src/routes/tarjetasRoutes")) // Added new route
