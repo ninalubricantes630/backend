@@ -220,7 +220,8 @@ async function loadVentasLista(pool, whereClause, params, orderDir, limit) {
   const p = [...params]
   if (limit) {
     sql += " LIMIT ?"
-    p.push(limit)
+    // MySQL 8.0.22+ + mysql2: LIMIT con Number puede disparar ER_WRONG_ARGUMENTS / "Incorrect arguments to mysqld_stmt_execute"
+    p.push(String(Number.parseInt(String(limit), 10)))
   }
   const [rows] = await pool.execute(sql, p)
   return rows
@@ -246,7 +247,7 @@ async function loadDetalleProductos(pool, whereClause, params, limit) {
   const p = [...params]
   if (limit) {
     sql += " LIMIT ?"
-    p.push(limit)
+    p.push(String(Number.parseInt(String(limit), 10)))
   }
   const [rows] = await pool.execute(sql, p)
   return rows
@@ -273,7 +274,7 @@ async function loadServiciosLista(pool, whereClause, params, orderDir, limit) {
   const p = [...params]
   if (limit) {
     sql += " LIMIT ?"
-    p.push(limit)
+    p.push(String(Number.parseInt(String(limit), 10)))
   }
   const [rows] = await pool.execute(sql, p)
   return rows
@@ -506,7 +507,7 @@ const obtenerDatos = async (req, res) => {
          INNER JOIN productos p ON p.id = dv.producto_id
          LEFT JOIN categorias cat ON cat.id = p.categoria_id
          WHERE ${whereClause}
-         GROUP BY cat.id, cat.nombre
+         GROUP BY COALESCE(cat.id, -1), COALESCE(cat.nombre, 'Sin categoría')
          ORDER BY total DESC
          LIMIT 15`,
         params,
