@@ -427,6 +427,36 @@ const serviciosController = {
         : (totalConInteresTarjetaFinal ?? totalBase)
       const totalConInteresParaGuardar = esPagoDividido ? totalAGuardar : totalConInteresTarjetaFinal
 
+      // Cuenta corriente: asegurar fila activa (cliente_id UNIQUE: reactivar si existía inactiva) y validar límite — antes, sin fila activa, el cargo se omitía en silencio
+      if (tipo_pago_upper === "CUENTA_CORRIENTE") {
+        await connection.execute(
+          `INSERT INTO cuentas_corrientes (cliente_id, saldo, limite_credito, activo) 
+           VALUES (?, 0, 0, 1)
+           ON DUPLICATE KEY UPDATE activo = 1`,
+          [cliente_id],
+        )
+
+        const [cuentaCorrientePre] = await connection.execute(
+          "SELECT * FROM cuentas_corrientes WHERE cliente_id = ? AND activo = 1",
+          [cliente_id],
+        )
+
+        if (cuentaCorrientePre.length === 0) {
+          throw new Error("No se pudo obtener la cuenta corriente del cliente tras crearla o reactivarla.")
+        }
+
+        const nuevoSaldoPre = Number.parseFloat(cuentaCorrientePre[0].saldo) + totalBase
+        const limiteCredito = Number.parseFloat(cuentaCorrientePre[0].limite_credito || 0)
+
+        if (limiteCredito > 0 && nuevoSaldoPre > limiteCredito) {
+          await connection.rollback()
+          connection.release()
+          return res.status(400).json({
+            error: `Límite de crédito excedido. Límite: ${limiteCredito}, Saldo actual: ${cuentaCorrientePre[0].saldo}, Nuevo saldo sería: ${nuevoSaldoPre}`,
+          })
+        }
+      }
+
       // Determinar el tipo de pago para guardar en la base de datos
       const tipoPagoFinal = esPagoDividido ? "PAGO_MULTIPLE" : tipo_pago_upper
       const tipoPago2Upper = tipo_pago_2 ? tipo_pago_2.toUpperCase() : null
@@ -661,32 +691,36 @@ const serviciosController = {
 
       if (tipo_pago_upper === "CUENTA_CORRIENTE") {
         const [cuentaCorriente] = await connection.execute(
-          "SELECT id, saldo FROM cuentas_corrientes WHERE cliente_id = ? AND activo = true",
+          "SELECT id, saldo, limite_credito FROM cuentas_corrientes WHERE cliente_id = ? AND activo = 1",
           [cliente_id],
         )
 
-        if (cuentaCorriente.length > 0) {
-          const cuenta_id = cuentaCorriente[0].id
-          const saldo_anterior = Number.parseFloat(cuentaCorriente[0].saldo)
-          const saldo_nuevo = saldo_anterior + totalBase
+        if (cuentaCorriente.length === 0) {
+          throw new Error(
+            "No se encontró cuenta corriente activa para el cliente tras la validación. Reintente o contacte soporte.",
+          )
+        }
 
-          await connection.execute("UPDATE cuentas_corrientes SET saldo = ? WHERE id = ?", [saldo_nuevo, cuenta_id])
+        const cuenta_id = cuentaCorriente[0].id
+        const saldo_anterior = Number.parseFloat(cuentaCorriente[0].saldo)
+        const saldo_nuevo = saldo_anterior + totalBase
 
-          await connection.execute(
-            `INSERT INTO movimientos_cuenta_corriente 
+        await connection.execute("UPDATE cuentas_corrientes SET saldo = ? WHERE id = ?", [saldo_nuevo, cuenta_id])
+
+        await connection.execute(
+          `INSERT INTO movimientos_cuenta_corriente 
              (cuenta_corriente_id, tipo, monto, saldo_anterior, saldo_nuevo, descripcion, referencia_tipo, referencia_id, usuario_id)
              VALUES (?, 'CARGO', ?, ?, ?, ?, 'SERVICE', ?, ?)`,
-            [cuenta_id, totalBase, saldo_anterior, saldo_nuevo, `Servicio #${numero}`, servicioId, usuario_id],
-          )
+          [cuenta_id, totalBase, saldo_anterior, saldo_nuevo, `Servicio #${numero}`, servicioId, usuario_id],
+        )
 
-          await connection.execute(
-            `UPDATE sesiones_caja SET 
+        await connection.execute(
+          `UPDATE sesiones_caja SET 
               total_servicios_cuenta_corriente = COALESCE(total_servicios_cuenta_corriente, 0) + ?,
               cantidad_servicios_cuenta_corriente = COALESCE(cantidad_servicios_cuenta_corriente, 0) + 1
             WHERE id = ?`,
-            [totalBase, sesion_caja_id],
-          )
-        }
+          [totalBase, sesion_caja_id],
+        )
       }
 
       await connection.commit()
@@ -1130,7 +1164,7 @@ const serviciosController = {
 
       if (servicio[0].tipo_pago === "CUENTA_CORRIENTE") {
         const [cuentaCorriente] = await connection.execute(
-          "SELECT id, saldo FROM cuentas_corrientes WHERE cliente_id = ? AND activo = true",
+          "SELECT id, saldo FROM cuentas_corrientes WHERE cliente_id = ? AND activo = 1",
           [servicio[0].cliente_id],
         )
 
