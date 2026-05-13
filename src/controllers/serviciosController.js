@@ -594,12 +594,12 @@ const serviciosController = {
               const producto_subtotal = precio_unitario * cantidad
 
               const [productoData] = await connection.execute(
-                "SELECT stock, unidad_medida, nombre FROM productos WHERE id = ?",
+                "SELECT stock, unidad_medida, nombre FROM productos WHERE id = ? AND (activo = 1 OR activo = TRUE)",
                 [producto.producto_id],
               )
 
               if (productoData.length === 0) {
-                throw new Error(`Producto con ID ${producto.producto_id} no encontrado`)
+                throw new Error(`Producto con ID ${producto.producto_id} no encontrado o inactivo`)
               }
 
               const stockAnterior = Number.parseFloat(productoData[0].stock)

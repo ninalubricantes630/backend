@@ -7,17 +7,17 @@ const { validateId } = require("../middleware/validation")
 // Aplicar autenticación a todas las rutas
 router.use(verifyToken)
 
-// Rutas CRUD
+// Rutas estáticas antes de /:id para que no capturen "exportar" ni "importar-excel" como id
 router.get("/", productosController.getProductos)
 router.post("/", productosController.createProducto)
+router.get("/exportar/excel", productosController.exportarProductosExcel)
+router.post("/importar-excel", productosController.importarProductosExcel)
+
 router.get("/:id", validateId, productosController.getProductoById)
 router.put("/:id", validateId, productosController.updateProducto)
 router.delete("/:id", validateId, productosController.deleteProducto)
 router.patch("/:id/toggle-estado", validateId, productosController.toggleEstadoProducto)
 
 router.post("/:id/movimientos", validateId, productosController.registrarMovimiento)
-
-router.get("/exportar/excel", productosController.exportarProductosExcel)
-router.post("/importar-excel", productosController.importarProductosExcel)
 
 module.exports = router

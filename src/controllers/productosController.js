@@ -53,6 +53,20 @@ function prioridadSucursalEsPermitida(prioridadId, sucursal_id, sucursales_ids) 
   return false
 }
 
+/** Filtro SQL por estado de producto (listado / export). Default: solo activos. */
+function buildProductoActivoFilter(estadoProductoRaw) {
+  const v = String(estadoProductoRaw ?? "activo")
+    .toLowerCase()
+    .trim()
+  if (v === "inactivo" || v === "inactivos") {
+    return " AND (p.activo = 0 OR p.activo = FALSE) "
+  }
+  if (v === "todos" || v === "all") {
+    return " "
+  }
+  return " AND (p.activo = 1 OR p.activo = TRUE) "
+}
+
 const productosController = {
   // Obtener todos los productos con filtros y paginación
   getProductos: async (req, res) => {
@@ -70,9 +84,11 @@ const productosController = {
         offset: offsetParam = 0,
         prioridad_sucursal_id: prioridadSucursalIdRaw,
         search_mode: searchModeRaw,
+        estado_producto: estadoProductoRaw,
       } = req.query
 
       const buscarPorCodigo = busquedaProductosPorCodigo(searchModeRaw)
+      const filtroActivoSql = buildProductoActivoFilter(estadoProductoRaw)
 
       const prioridadParsed = Number.parseInt(
         prioridadSucursalIdRaw !== undefined && prioridadSucursalIdRaw !== null && prioridadSucursalIdRaw !== ""
@@ -90,9 +106,10 @@ const productosController = {
         FROM productos p
         LEFT JOIN categorias c ON p.categoria_id = c.id
         LEFT JOIN sucursales s ON p.sucursal_id = s.id
-        WHERE p.activo = true
+        WHERE 1=1
+        ${filtroActivoSql}
       `
-      let countQuery = "SELECT COUNT(*) as total FROM productos p WHERE p.activo = true"
+      let countQuery = `SELECT COUNT(*) as total FROM productos p WHERE 1=1 ${filtroActivoSql}`
       const queryParams = []
       const countParams = []
 
@@ -766,10 +783,12 @@ const productosController = {
         sucursal_id,
         sucursales_ids,
         search_mode: searchModeRaw,
+        estado_producto: estadoProductoRaw,
       } = req.query
 
       const searchTrimmed = typeof search === "string" ? search.trim() : ""
       const buscarPorCodigo = busquedaProductosPorCodigo(searchModeRaw)
+      const filtroActivoSql = buildProductoActivoFilter(estadoProductoRaw)
 
       let query = `
         SELECT 
@@ -789,7 +808,8 @@ const productosController = {
         FROM productos p
         LEFT JOIN categorias c ON p.categoria_id = c.id
         LEFT JOIN sucursales s ON p.sucursal_id = s.id
-        WHERE p.activo = true
+        WHERE 1=1
+        ${filtroActivoSql}
       `
       const queryParams = []
 
