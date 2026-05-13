@@ -13,7 +13,14 @@ const clientesController = {
         sucursal_id = "",
         sucursales_ids = "",
         con_saldo_cc = "",
+        strict_sucursal: strictSucursalRaw = "",
       } = req.query
+
+      const strictSucursal =
+        strictSucursalRaw === true ||
+        strictSucursalRaw === "true" ||
+        strictSucursalRaw === "1" ||
+        String(strictSucursalRaw).toLowerCase() === "yes"
 
       const soloConSaldoCuentaCorriente =
         con_saldo_cc === true ||
@@ -78,15 +85,25 @@ const clientesController = {
       const countParams = []
 
       if (sucursal_id) {
-        query += " AND (c.sucursal_id = ? OR c.sucursal_id IS NULL)"
-        countQuery += " AND (c.sucursal_id = ? OR c.sucursal_id IS NULL)"
+        if (strictSucursal) {
+          query += " AND c.sucursal_id = ?"
+          countQuery += " AND c.sucursal_id = ?"
+        } else {
+          query += " AND (c.sucursal_id = ? OR c.sucursal_id IS NULL)"
+          countQuery += " AND (c.sucursal_id = ? OR c.sucursal_id IS NULL)"
+        }
         queryParams.push(sucursal_id)
         countParams.push(sucursal_id)
       } else if (sucursales_ids) {
         const idsArray = sucursales_ids.split(",").map((id) => id.trim())
         const placeholders = idsArray.map(() => "?").join(",")
-        query += ` AND (c.sucursal_id IN (${placeholders}) OR c.sucursal_id IS NULL)`
-        countQuery += ` AND (c.sucursal_id IN (${placeholders}) OR c.sucursal_id IS NULL)`
+        if (strictSucursal) {
+          query += ` AND c.sucursal_id IN (${placeholders})`
+          countQuery += ` AND c.sucursal_id IN (${placeholders})`
+        } else {
+          query += ` AND (c.sucursal_id IN (${placeholders}) OR c.sucursal_id IS NULL)`
+          countQuery += ` AND (c.sucursal_id IN (${placeholders}) OR c.sucursal_id IS NULL)`
+        }
         queryParams.push(...idsArray)
         countParams.push(...idsArray)
       }
