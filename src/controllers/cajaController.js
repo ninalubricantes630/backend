@@ -149,7 +149,7 @@ const cerrarCaja = async (req, res) => {
         SUM(CASE WHEN tipo = 'EGRESO' THEN monto ELSE 0 END) as total_egresos,
         SUM(CASE WHEN tipo = 'INGRESO' AND concepto != 'Apertura de caja' AND metodo_pago = 'EFECTIVO' THEN monto ELSE 0 END) as total_ingresos_efectivo
       FROM movimientos_caja 
-      WHERE sesion_caja_id = ? AND estado = 'ACTIVO'`,
+      WHERE sesion_caja_id = ? AND (estado = 'ACTIVO' OR estado IS NULL)`,
       [sesionId],
     )
 
@@ -175,7 +175,7 @@ const cerrarCaja = async (req, res) => {
       WHERE sesion_caja_id = ? 
         AND tipo = 'INGRESO'
         AND concepto != 'Apertura de caja'
-        AND estado = 'ACTIVO'
+        AND (estado = 'ACTIVO' OR estado IS NULL)
       GROUP BY metodo_pago`,
       [sesionId],
     )
@@ -486,7 +486,7 @@ const obtenerDetalleSesion = async (req, res) => {
         COUNT(CASE WHEN tipo = 'INGRESO' AND concepto != 'Apertura de caja' THEN 1 END) as cantidad_ingresos,
         COUNT(CASE WHEN tipo = 'EGRESO' THEN 1 END) as cantidad_egresos
       FROM movimientos_caja 
-      WHERE sesion_caja_id = ? AND estado = 'ACTIVO'`,
+      WHERE sesion_caja_id = ? AND (estado = 'ACTIVO' OR estado IS NULL)`,
       [sesionId],
     )
 
@@ -521,7 +521,7 @@ const obtenerDetalleIngresos = async (req, res) => {
       WHERE sesion_caja_id = ? 
         AND tipo = 'INGRESO'
         AND concepto != 'Apertura de caja'
-        AND estado = 'ACTIVO'
+        AND (estado = 'ACTIVO' OR estado IS NULL)
       GROUP BY metodo_pago
       ORDER BY total DESC`,
       [sesionId],
@@ -573,7 +573,7 @@ const obtenerResumenCaja = async (req, res) => {
         COUNT(CASE WHEN tipo = 'INGRESO' AND concepto != 'Apertura de caja' THEN 1 END) as cantidad_ingresos,
         COUNT(CASE WHEN tipo = 'EGRESO' THEN 1 END) as cantidad_egresos
       FROM movimientos_caja 
-      WHERE sesion_caja_id = ? AND estado = 'ACTIVO'`,
+      WHERE sesion_caja_id = ? AND (estado = 'ACTIVO' OR estado IS NULL)`,
       [sesionId],
     )
 
@@ -590,7 +590,7 @@ const obtenerResumenCaja = async (req, res) => {
       WHERE sesion_caja_id = ? 
         AND tipo = 'INGRESO'
         AND concepto != 'Apertura de caja'
-        AND estado = 'ACTIVO'
+        AND (estado = 'ACTIVO' OR estado IS NULL)
       GROUP BY metodo_pago
       ORDER BY total DESC`,
       [sesionId],
