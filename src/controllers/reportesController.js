@@ -6,6 +6,10 @@ const logger = require("../config/logger")
 const TIPOS_REPORTE = ["ventas", "servicios", "ambos"]
 const PERIODOS = ["diario", "mensual", "anual", "personalizado"]
 
+const UI_LIMIT_VENTAS = 500
+const UI_LIMIT_SERVICIOS = 500
+const UI_LIMIT_DETALLE = 1200
+
 const pad2 = (n) => String(n).padStart(2, "0")
 
 const formatDateTime = (d) => {
@@ -18,6 +22,10 @@ const formatDateTime = (d) => {
     return String(d)
   }
 }
+
+/** Expresión SQL alineada con montoVenta() en JS */
+const SQL_MONTO_VENTA =
+  "CASE WHEN v.total_con_interes_tarjeta IS NOT NULL AND v.total_con_interes_tarjeta != 0 THEN v.total_con_interes_tarjeta ELSE COALESCE(v.total, 0) END"
 
 const resolveDateRange = (body) => {
   const { periodo_tipo, fecha, anio, mes, fecha_desde, fecha_hasta } = body
@@ -153,27 +161,132 @@ const buildServiciosWhere = (sucursalId, desde, hasta, tipoPago, estado) => {
   return { whereClause: where.join(" AND "), params }
 }
 
+const parseReportBody = (body) => {
+  const tipo_reporte = String(body.tipo_reporte || "").toLowerCase()
+  const periodo_tipo = String(body.periodo_tipo || "").toLowerCase()
+
+  if (!TIPOS_REPORTE.includes(tipo_reporte)) {
+    return { error: "tipo_reporte debe ser ventas, servicios o ambos." }
+  }
+  if (!PERIODOS.includes(periodo_tipo)) {
+    return { error: "periodo_tipo no válido." }
+  }
+
+  let range
+  try {
+    range = resolveDateRange(body)
+  } catch (e) {
+    return { error: e.message }
+  }
+
+  const categoria_id = body.categoria_id ? Number.parseInt(body.categoria_id, 10) : null
+  const tipo_pago_ventas = body.tipo_pago_ventas ? String(body.tipo_pago_ventas).toUpperCase().trim() : ""
+  const estado_ventas = body.estado_ventas ? String(body.estado_ventas).toUpperCase().trim() : ""
+  const tipo_pago_servicios = body.tipo_pago_servicios
+    ? String(body.tipo_pago_servicios).toUpperCase().trim()
+    : ""
+  const estado_servicios = body.estado_servicios ? String(body.estado_servicios).toUpperCase().trim() : ""
+
+  return {
+    tipo_reporte,
+    periodo_tipo,
+    range,
+    categoria_id: Number.isFinite(categoria_id) ? categoria_id : null,
+    tipo_pago_ventas,
+    estado_ventas,
+    tipo_pago_servicios,
+    estado_servicios,
+  }
+}
+
+async function loadVentasLista(pool, whereClause, params, orderDir, limit) {
+  const order = orderDir === "DESC" ? "DESC" : "ASC"
+  let sql = `SELECT
+      v.id,
+      v.numero,
+      v.tipo_pago,
+      v.subtotal,
+      v.descuento,
+      v.total,
+      v.total_con_interes_tarjeta,
+      v.estado,
+      v.observaciones,
+      v.created_at,
+      CONCAT(c.nombre, ' ', IFNULL(c.apellido, '')) AS cliente_nombre
+    FROM ventas v
+    LEFT JOIN clientes c ON v.cliente_id = c.id
+    WHERE ${whereClause}
+    ORDER BY v.created_at ${order}, v.id ${order}`
+  const p = [...params]
+  if (limit) {
+    sql += " LIMIT ?"
+    p.push(limit)
+  }
+  const [rows] = await pool.execute(sql, p)
+  return rows
+}
+
+async function loadDetalleProductos(pool, whereClause, params, limit) {
+  let sql = `SELECT
+      v.numero AS venta_numero,
+      v.created_at AS venta_fecha,
+      cat.nombre AS categoria,
+      p.codigo AS producto_codigo,
+      p.nombre AS producto_nombre,
+      dv.cantidad,
+      dv.precio_unitario,
+      (dv.cantidad * dv.precio_unitario) AS subtotal_linea,
+      v.estado AS venta_estado
+    FROM detalle_ventas dv
+    INNER JOIN ventas v ON v.id = dv.venta_id
+    INNER JOIN productos p ON p.id = dv.producto_id
+    LEFT JOIN categorias cat ON cat.id = p.categoria_id
+    WHERE ${whereClause}
+    ORDER BY v.created_at DESC, v.numero ASC, dv.id ASC`
+  const p = [...params]
+  if (limit) {
+    sql += " LIMIT ?"
+    p.push(limit)
+  }
+  const [rows] = await pool.execute(sql, p)
+  return rows
+}
+
+async function loadServiciosLista(pool, whereClause, params, orderDir, limit) {
+  const order = orderDir === "DESC" ? "DESC" : "ASC"
+  let sql = `SELECT
+      s.numero,
+      s.created_at,
+      s.tipo_pago,
+      s.estado,
+      s.total,
+      s.observaciones,
+      CONCAT(c.nombre, ' ', IFNULL(c.apellido, '')) AS cliente_nombre,
+      v.patente AS vehiculo_patente,
+      v.marca AS vehiculo_marca,
+      v.modelo AS vehiculo_modelo
+    FROM servicios s
+    LEFT JOIN clientes c ON s.cliente_id = c.id
+    LEFT JOIN vehiculos v ON s.vehiculo_id = v.id
+    WHERE ${whereClause}
+    ORDER BY s.created_at ${order}, s.id ${order}`
+  const p = [...params]
+  if (limit) {
+    sql += " LIMIT ?"
+    p.push(limit)
+  }
+  const [rows] = await pool.execute(sql, p)
+  return rows
+}
+
 const exportarExcel = async (req, res) => {
   try {
-    const body = req.body || {}
-    const tipo_reporte = String(body.tipo_reporte || "").toLowerCase()
-    const periodo_tipo = String(body.periodo_tipo || "").toLowerCase()
-
-    if (!TIPOS_REPORTE.includes(tipo_reporte)) {
-      return ResponseHelper.validationError(res, "tipo_reporte debe ser ventas, servicios o ambos.")
-    }
-    if (!PERIODOS.includes(periodo_tipo)) {
-      return ResponseHelper.validationError(res, "periodo_tipo no válido.")
+    const parsed = parseReportBody(req.body || {})
+    if (parsed.error) {
+      return ResponseHelper.validationError(res, parsed.error)
     }
 
-    let range
-    try {
-      range = resolveDateRange(body)
-    } catch (e) {
-      return ResponseHelper.validationError(res, e.message)
-    }
-
-    const check = await assertSucursal(db.pool, req.user.id, req.user.rol, body.sucursal_id)
+    const check = await assertSucursal(db.pool, req.user.id, req.user.rol, req.body.sucursal_id)
     if (!check.ok) {
       if (check.code === "FORBIDDEN") {
         return ResponseHelper.forbidden(res, check.message)
@@ -181,16 +294,17 @@ const exportarExcel = async (req, res) => {
       return ResponseHelper.validationError(res, check.message)
     }
 
-    const sucursal_id = Number.parseInt(body.sucursal_id, 10)
+    const sucursal_id = Number.parseInt(req.body.sucursal_id, 10)
+    const {
+      tipo_reporte,
+      range,
+      categoria_id,
+      tipo_pago_ventas,
+      estado_ventas,
+      tipo_pago_servicios,
+      estado_servicios,
+    } = parsed
     const { desde, hasta, label } = range
-
-    const categoria_id = body.categoria_id ? Number.parseInt(body.categoria_id, 10) : null
-    const tipo_pago_ventas = body.tipo_pago_ventas ? String(body.tipo_pago_ventas).toUpperCase().trim() : ""
-    const estado_ventas = body.estado_ventas ? String(body.estado_ventas).toUpperCase().trim() : ""
-    const tipo_pago_servicios = body.tipo_pago_servicios
-      ? String(body.tipo_pago_servicios).toUpperCase().trim()
-      : ""
-    const estado_servicios = body.estado_servicios ? String(body.estado_servicios).toUpperCase().trim() : ""
 
     const wb = XLSX.utils.book_new()
 
@@ -205,59 +319,10 @@ const exportarExcel = async (req, res) => {
         hasta,
         tipo_pago_ventas,
         estado_ventas,
-        Number.isFinite(categoria_id) ? categoria_id : null,
+        categoria_id,
       )
-
-      const [vRows] = await db.pool.execute(
-        `SELECT
-          v.id,
-          v.numero,
-          v.tipo_pago,
-          v.subtotal,
-          v.descuento,
-          v.total,
-          v.total_con_interes_tarjeta,
-          v.estado,
-          v.observaciones,
-          v.created_at,
-          CONCAT(c.nombre, ' ', IFNULL(c.apellido, '')) AS cliente_nombre
-        FROM ventas v
-        LEFT JOIN clientes c ON v.cliente_id = c.id
-        WHERE ${whereClause}
-        ORDER BY v.created_at ASC, v.id ASC`,
-        params,
-      )
-      ventas = vRows
-
-      const { whereClause: w2, params: p2 } = buildVentasWhere(
-        sucursal_id,
-        desde,
-        hasta,
-        tipo_pago_ventas,
-        estado_ventas,
-        Number.isFinite(categoria_id) ? categoria_id : null,
-      )
-
-      const [dRows] = await db.pool.execute(
-        `SELECT
-          v.numero AS venta_numero,
-          v.created_at AS venta_fecha,
-          cat.nombre AS categoria,
-          p.codigo AS producto_codigo,
-          p.nombre AS producto_nombre,
-          dv.cantidad,
-          dv.precio_unitario,
-          (dv.cantidad * dv.precio_unitario) AS subtotal_linea,
-          v.estado AS venta_estado
-        FROM detalle_ventas dv
-        INNER JOIN ventas v ON v.id = dv.venta_id
-        INNER JOIN productos p ON p.id = dv.producto_id
-        LEFT JOIN categorias cat ON cat.id = p.categoria_id
-        WHERE ${w2}
-        ORDER BY v.created_at ASC, v.numero ASC, dv.id ASC`,
-        p2,
-      )
-      detalleProductos = dRows
+      ventas = await loadVentasLista(db.pool, whereClause, params, "ASC", null)
+      detalleProductos = await loadDetalleProductos(db.pool, whereClause, params, null)
     }
 
     if (tipo_reporte === "servicios" || tipo_reporte === "ambos") {
@@ -268,27 +333,7 @@ const exportarExcel = async (req, res) => {
         tipo_pago_servicios,
         estado_servicios,
       )
-
-      const [sRows] = await db.pool.execute(
-        `SELECT
-          s.numero,
-          s.created_at,
-          s.tipo_pago,
-          s.estado,
-          s.total,
-          s.observaciones,
-          CONCAT(c.nombre, ' ', IFNULL(c.apellido, '')) AS cliente_nombre,
-          v.patente AS vehiculo_patente,
-          v.marca AS vehiculo_marca,
-          v.modelo AS vehiculo_modelo
-        FROM servicios s
-        LEFT JOIN clientes c ON s.cliente_id = c.id
-        LEFT JOIN vehiculos v ON s.vehiculo_id = v.id
-        WHERE ${whereClause}
-        ORDER BY s.created_at ASC, s.id ASC`,
-        params,
-      )
-      servicios = sRows
+      servicios = await loadServiciosLista(db.pool, whereClause, params, "ASC", null)
     }
 
     const totalVentasMonto = ventas.reduce((acc, v) => acc + montoVenta(v), 0)
@@ -381,6 +426,229 @@ const exportarExcel = async (req, res) => {
   }
 }
 
+const obtenerDatos = async (req, res) => {
+  try {
+    const parsed = parseReportBody(req.body || {})
+    if (parsed.error) {
+      return ResponseHelper.validationError(res, parsed.error)
+    }
+
+    const check = await assertSucursal(db.pool, req.user.id, req.user.rol, req.body.sucursal_id)
+    if (!check.ok) {
+      if (check.code === "FORBIDDEN") {
+        return ResponseHelper.forbidden(res, check.message)
+      }
+      return ResponseHelper.validationError(res, check.message)
+    }
+
+    const sucursal_id = Number.parseInt(req.body.sucursal_id, 10)
+    const {
+      tipo_reporte,
+      periodo_tipo,
+      range,
+      categoria_id,
+      tipo_pago_ventas,
+      estado_ventas,
+      tipo_pago_servicios,
+      estado_servicios,
+    } = parsed
+    const { desde, hasta, label } = range
+
+    let ventas = []
+    let servicios = []
+    let detalleProductos = []
+    let ventasTotalCount = 0
+    let serviciosTotalCount = 0
+    let ventasPorDia = []
+    let serviciosPorDia = []
+    let ventasPorTipoPago = []
+    let serviciosPorTipoPago = []
+    let ventasPorCategoria = []
+
+    if (tipo_reporte === "ventas" || tipo_reporte === "ambos") {
+      const base = buildVentasWhere(sucursal_id, desde, hasta, tipo_pago_ventas, estado_ventas, categoria_id)
+      const { whereClause, params } = base
+
+      const [cV] = await db.pool.execute(`SELECT COUNT(*) AS n FROM ventas v WHERE ${whereClause}`, params)
+      ventasTotalCount = Number(cV[0]?.n || 0)
+
+      const [vpd] = await db.pool.execute(
+        `SELECT DATE(v.created_at) AS fecha, COUNT(*) AS cantidad, SUM(${SQL_MONTO_VENTA}) AS total
+         FROM ventas v WHERE ${whereClause}
+         GROUP BY DATE(v.created_at) ORDER BY fecha ASC`,
+        params,
+      )
+      ventasPorDia = vpd.map((r) => ({
+        fecha:
+          r.fecha instanceof Date ? r.fecha.toISOString().slice(0, 10) : String(r.fecha).slice(0, 10),
+        cantidad: Number(r.cantidad || 0),
+        total: Number(r.total || 0),
+      }))
+
+      const [vpp] = await db.pool.execute(
+        `SELECT v.tipo_pago AS tipo_pago, COUNT(*) AS cantidad, SUM(${SQL_MONTO_VENTA}) AS total
+         FROM ventas v WHERE ${whereClause}
+         GROUP BY v.tipo_pago ORDER BY total DESC`,
+        params,
+      )
+      ventasPorTipoPago = vpp.map((r) => ({
+        tipo_pago: r.tipo_pago || "—",
+        cantidad: Number(r.cantidad || 0),
+        total: Number(r.total || 0),
+      }))
+
+      const [vpc] = await db.pool.execute(
+        `SELECT COALESCE(cat.nombre, 'Sin categoría') AS categoria,
+                SUM(dv.cantidad * dv.precio_unitario) AS total,
+                SUM(dv.cantidad) AS unidades
+         FROM detalle_ventas dv
+         INNER JOIN ventas v ON v.id = dv.venta_id
+         INNER JOIN productos p ON p.id = dv.producto_id
+         LEFT JOIN categorias cat ON cat.id = p.categoria_id
+         WHERE ${whereClause}
+         GROUP BY cat.id, cat.nombre
+         ORDER BY total DESC
+         LIMIT 15`,
+        params,
+      )
+      ventasPorCategoria = vpc.map((r) => ({
+        categoria: r.categoria,
+        total: Number(r.total || 0),
+        unidades: Number(r.unidades || 0),
+      }))
+
+      ventas = await loadVentasLista(db.pool, whereClause, params, "DESC", UI_LIMIT_VENTAS)
+      detalleProductos = await loadDetalleProductos(db.pool, whereClause, params, UI_LIMIT_DETALLE)
+    }
+
+    if (tipo_reporte === "servicios" || tipo_reporte === "ambos") {
+      const { whereClause, params } = buildServiciosWhere(
+        sucursal_id,
+        desde,
+        hasta,
+        tipo_pago_servicios,
+        estado_servicios,
+      )
+
+      const [cS] = await db.pool.execute(`SELECT COUNT(*) AS n FROM servicios s WHERE ${whereClause}`, params)
+      serviciosTotalCount = Number(cS[0]?.n || 0)
+
+      const [spd] = await db.pool.execute(
+        `SELECT DATE(s.created_at) AS fecha, COUNT(*) AS cantidad, SUM(COALESCE(s.total, 0)) AS total
+         FROM servicios s WHERE ${whereClause}
+         GROUP BY DATE(s.created_at) ORDER BY fecha ASC`,
+        params,
+      )
+      serviciosPorDia = spd.map((r) => ({
+        fecha:
+          r.fecha instanceof Date ? r.fecha.toISOString().slice(0, 10) : String(r.fecha).slice(0, 10),
+        cantidad: Number(r.cantidad || 0),
+        total: Number(r.total || 0),
+      }))
+
+      const [spp] = await db.pool.execute(
+        `SELECT s.tipo_pago AS tipo_pago, COUNT(*) AS cantidad, SUM(COALESCE(s.total, 0)) AS total
+         FROM servicios s WHERE ${whereClause}
+         GROUP BY s.tipo_pago ORDER BY total DESC`,
+        params,
+      )
+      serviciosPorTipoPago = spp.map((r) => ({
+        tipo_pago: r.tipo_pago || "—",
+        cantidad: Number(r.cantidad || 0),
+        total: Number(r.total || 0),
+      }))
+
+      servicios = await loadServiciosLista(db.pool, whereClause, params, "DESC", UI_LIMIT_SERVICIOS)
+    }
+
+    let ventasMontoPeriodo = 0
+    let serviciosMontoPeriodo = 0
+    if (tipo_reporte === "ventas" || tipo_reporte === "ambos") {
+      const { whereClause, params } = buildVentasWhere(
+        sucursal_id,
+        desde,
+        hasta,
+        tipo_pago_ventas,
+        estado_ventas,
+        categoria_id,
+      )
+      const [sumV] = await db.pool.execute(
+        `SELECT SUM(${SQL_MONTO_VENTA}) AS total FROM ventas v WHERE ${whereClause}`,
+        params,
+      )
+      ventasMontoPeriodo = Number(sumV[0]?.total || 0)
+    }
+    if (tipo_reporte === "servicios" || tipo_reporte === "ambos") {
+      const { whereClause, params } = buildServiciosWhere(
+        sucursal_id,
+        desde,
+        hasta,
+        tipo_pago_servicios,
+        estado_servicios,
+      )
+      const [sumS] = await db.pool.execute(
+        `SELECT SUM(COALESCE(s.total, 0)) AS total FROM servicios s WHERE ${whereClause}`,
+        params,
+      )
+      serviciosMontoPeriodo = Number(sumS[0]?.total || 0)
+    }
+
+    const combinadoMonto =
+      tipo_reporte === "ambos" ? ventasMontoPeriodo + serviciosMontoPeriodo : null
+
+    const data = {
+      meta: {
+        sucursal: check.sucursal,
+        periodo_label: label,
+        fecha_desde: desde,
+        fecha_hasta: hasta,
+        periodo_tipo,
+        tipo_reporte,
+        generado_at: new Date().toISOString(),
+        usuario: { id: req.user.id, nombre: req.user.nombre },
+        limites: {
+          ventas_lista: UI_LIMIT_VENTAS,
+          servicios_lista: UI_LIMIT_SERVICIOS,
+          detalle_lineas: UI_LIMIT_DETALLE,
+        },
+      },
+      resumen: {
+        ventas_total_count: tipo_reporte === "servicios" ? 0 : ventasTotalCount,
+        ventas_total_monto: tipo_reporte === "servicios" ? 0 : ventasMontoPeriodo,
+        ventas_lista_count: ventas.length,
+        ventas_truncado: tipo_reporte !== "servicios" && ventasTotalCount > ventas.length,
+        servicios_total_count: tipo_reporte === "ventas" ? 0 : serviciosTotalCount,
+        servicios_total_monto: tipo_reporte === "ventas" ? 0 : serviciosMontoPeriodo,
+        servicios_lista_count: servicios.length,
+        servicios_truncado: tipo_reporte !== "ventas" && serviciosTotalCount > servicios.length,
+        detalle_lineas_count: detalleProductos.length,
+        detalle_truncado: tipo_reporte !== "servicios" && detalleProductos.length >= UI_LIMIT_DETALLE,
+        combinado_monto: combinadoMonto,
+      },
+      series: {
+        ventas_por_dia: tipo_reporte === "servicios" ? [] : ventasPorDia,
+        servicios_por_dia: tipo_reporte === "ventas" ? [] : serviciosPorDia,
+      },
+      distribucion: {
+        ventas_por_tipo_pago: tipo_reporte === "servicios" ? [] : ventasPorTipoPago,
+        servicios_por_tipo_pago: tipo_reporte === "ventas" ? [] : serviciosPorTipoPago,
+        ventas_por_categoria: tipo_reporte === "servicios" ? [] : ventasPorCategoria,
+      },
+      listas: {
+        ventas: tipo_reporte === "servicios" ? [] : ventas,
+        servicios: tipo_reporte === "ventas" ? [] : servicios,
+        detalle_productos: tipo_reporte === "servicios" ? [] : detalleProductos,
+      },
+    }
+
+    return ResponseHelper.success(res, data, "Reporte obtenido correctamente")
+  } catch (error) {
+    logger.error("Error obtenerDatos reportes", { message: error.message, stack: error.stack })
+    return ResponseHelper.error(res, "Error al obtener el reporte.", 500)
+  }
+}
+
 module.exports = {
   exportarExcel,
+  obtenerDatos,
 }
