@@ -927,7 +927,7 @@ const cancelarVenta = async (req, res) => {
             referencia_tipo, 
             referencia_id,
             usuario_id
-          ) VALUES (?, 'AJUSTE', ?, ?, ?, ?, 'VENTA', ?, ?, ?)`,
+          ) VALUES (?, 'AJUSTE', ?, ?, ?, ?, 'VENTA', ?, ?)`,
           [
             cuentaCorriente[0].id,
             montoParaRestar,
