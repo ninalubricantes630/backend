@@ -331,6 +331,22 @@ const productosController = {
         return ResponseHelper.notFound(res, "Sucursal no encontrada")
       }
 
+      // Bloquear sucursal para serializar creaciones concurrentes (evita productos duplicados)
+      await connection.execute("SELECT id FROM sucursales WHERE id = ? FOR UPDATE", [sucursal_id])
+
+      const nombreNormalizado = nombre.trim()
+
+      const [existingByNombre] = await connection.execute(
+        "SELECT id FROM productos WHERE nombre = ? AND sucursal_id = ? AND activo = true LIMIT 1",
+        [nombreNormalizado, sucursal_id],
+      )
+
+      if (existingByNombre.length > 0) {
+        await connection.rollback()
+        connection.release()
+        return ResponseHelper.conflict(res, "Ya existe un producto con este nombre en la sucursal")
+      }
+
       // Verificar si el código ya existe (si se proporciona)
       if (codigo) {
         const [existingProducto] = await connection.execute(
@@ -352,7 +368,7 @@ const productosController = {
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, true)`,
         [
           codigo || null,
-          nombre,
+          nombreNormalizado,
           descripcion || null,
           categoria_id,
           fabricante || null,
@@ -397,6 +413,9 @@ const productosController = {
       await connection.rollback()
       connection.release()
       logger.error("Error al crear producto:", error)
+      if (error.code === "ER_DUP_ENTRY") {
+        return ResponseHelper.conflict(res, "El código de producto ya existe")
+      }
       return ResponseHelper.error(res, `Error al crear producto: ${error.message}`, 500)
     }
   },
@@ -458,6 +477,18 @@ const productosController = {
         return ResponseHelper.notFound(res, "Sucursal no encontrada")
       }
 
+      const nombreNormalizado = nombre?.trim()
+      if (nombreNormalizado) {
+        const [existingByNombre] = await db.pool.execute(
+          "SELECT id FROM productos WHERE nombre = ? AND sucursal_id = ? AND activo = true AND id != ? LIMIT 1",
+          [nombreNormalizado, sucursal_id, id],
+        )
+
+        if (existingByNombre.length > 0) {
+          return ResponseHelper.conflict(res, "Ya existe un producto con este nombre en la sucursal")
+        }
+      }
+
       const updateFields = []
       const updateValues = []
 
@@ -469,7 +500,7 @@ const productosController = {
         "fabricante = ?",
         "precio = ?",
       )
-      updateValues.push(codigo || null, nombre, descripcion || null, categoria_id, fabricante || null, precio)
+      updateValues.push(codigo || null, nombreNormalizado || nombre, descripcion || null, categoria_id, fabricante || null, precio)
 
       if (stock_minimo !== undefined) {
         updateFields.push("stock_minimo = ?")

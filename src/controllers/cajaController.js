@@ -78,6 +78,26 @@ const abrirCaja = async (req, res) => {
 
     const observacionesValue = observaciones || null
 
+    // Bloquear la sucursal para serializar aperturas concurrentes (evita doble apertura)
+    const [sucursal] = await connection.execute("SELECT id FROM sucursales WHERE id = ? FOR UPDATE", [sucursalId])
+
+    if (sucursal.length === 0) {
+      await connection.rollback()
+      connection.release()
+      return ResponseHelper.notFound(res, "Sucursal no encontrada")
+    }
+
+    const [sesionesAbiertas] = await connection.execute(
+      "SELECT id FROM sesiones_caja WHERE sucursal_id = ? AND estado = 'ABIERTA' LIMIT 1",
+      [sucursalId],
+    )
+
+    if (sesionesAbiertas.length > 0) {
+      await connection.rollback()
+      connection.release()
+      return ResponseHelper.conflict(res, "Ya existe una sesión de caja abierta en esta sucursal")
+    }
+
     // Crear nueva sesión de caja
     const [result] = await connection.execute(
       `INSERT INTO sesiones_caja 
