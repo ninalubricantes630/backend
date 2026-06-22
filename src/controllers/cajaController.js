@@ -2,6 +2,12 @@ const db = require("../config/database")
 const ResponseHelper = require("../utils/responseHelper")
 const logger = require("../config/logger")
 
+/**
+ * Egresos de anulación de venta/servicio: el ingreso original ya está CANCELADO.
+ * No deben restarse en totales ni desglose neto (evita doble descuento).
+ */
+const SQL_EGRESO_CONTABLE = `(referencia_tipo IS NULL OR referencia_tipo NOT IN ('VENTA_CANCELADA', 'SERVICIO_CANCELADO'))`
+
 // Obtener sesión de caja activa para una sucursal
 const obtenerSesionActiva = async (req, res) => {
   try {
@@ -376,7 +382,7 @@ const obtenerMovimientos = async (req, res) => {
     const [resumen] = await db.pool.execute(
       `SELECT 
         SUM(CASE WHEN tipo = 'INGRESO' AND concepto != 'Apertura de caja' THEN monto ELSE 0 END) as total_ingresos,
-        SUM(CASE WHEN tipo = 'EGRESO' THEN monto ELSE 0 END) as total_egresos,
+        SUM(CASE WHEN tipo = 'EGRESO' AND ${SQL_EGRESO_CONTABLE} THEN monto ELSE 0 END) as total_egresos,
         COUNT(*) as total_movimientos
       FROM movimientos_caja 
       WHERE sesion_caja_id = ? AND (estado = 'ACTIVO' OR estado IS NULL)`,
@@ -488,10 +494,10 @@ const obtenerDetalleSesion = async (req, res) => {
     const [resumen] = await db.pool.execute(
       `SELECT 
         SUM(CASE WHEN tipo = 'INGRESO' AND concepto != 'Apertura de caja' THEN monto ELSE 0 END) as total_ingresos,
-        SUM(CASE WHEN tipo = 'EGRESO' THEN monto ELSE 0 END) as total_egresos,
+        SUM(CASE WHEN tipo = 'EGRESO' AND ${SQL_EGRESO_CONTABLE} THEN monto ELSE 0 END) as total_egresos,
         COUNT(*) as total_movimientos,
         COUNT(CASE WHEN tipo = 'INGRESO' AND concepto != 'Apertura de caja' THEN 1 END) as cantidad_ingresos,
-        COUNT(CASE WHEN tipo = 'EGRESO' THEN 1 END) as cantidad_egresos
+        COUNT(CASE WHEN tipo = 'EGRESO' AND ${SQL_EGRESO_CONTABLE} THEN 1 END) as cantidad_egresos
       FROM movimientos_caja 
       WHERE sesion_caja_id = ? AND (estado = 'ACTIVO' OR estado IS NULL)`,
       [sesionId],
@@ -566,9 +572,9 @@ async function calcularTotalesSesionCaja(sesionId, executor = db.pool) {
   const [movimientos] = await executor.execute(
     `SELECT 
       SUM(CASE WHEN tipo = 'INGRESO' AND concepto != 'Apertura de caja' THEN monto ELSE 0 END) as total_ingresos,
-      SUM(CASE WHEN tipo = 'EGRESO' THEN monto ELSE 0 END) as total_egresos,
+      SUM(CASE WHEN tipo = 'EGRESO' AND ${SQL_EGRESO_CONTABLE} THEN monto ELSE 0 END) as total_egresos,
       SUM(CASE WHEN tipo = 'INGRESO' AND concepto != 'Apertura de caja' AND metodo_pago = 'EFECTIVO' THEN monto ELSE 0 END) as total_ingresos_efectivo,
-      SUM(CASE WHEN tipo = 'EGRESO' AND metodo_pago = 'EFECTIVO' THEN monto ELSE 0 END) as total_egresos_efectivo
+      SUM(CASE WHEN tipo = 'EGRESO' AND metodo_pago = 'EFECTIVO' AND ${SQL_EGRESO_CONTABLE} THEN monto ELSE 0 END) as total_egresos_efectivo
     FROM movimientos_caja 
     WHERE sesion_caja_id = ? AND (estado = 'ACTIVO' OR estado IS NULL)`,
     [sesionId],
@@ -628,7 +634,7 @@ const obtenerResumenCaja = async (req, res) => {
     const [resumen] = await db.pool.execute(
       `SELECT 
         COUNT(CASE WHEN tipo = 'INGRESO' AND concepto != 'Apertura de caja' THEN 1 END) as cantidad_ingresos,
-        COUNT(CASE WHEN tipo = 'EGRESO' THEN 1 END) as cantidad_egresos
+        COUNT(CASE WHEN tipo = 'EGRESO' AND ${SQL_EGRESO_CONTABLE} THEN 1 END) as cantidad_egresos
       FROM movimientos_caja 
       WHERE sesion_caja_id = ? AND (estado = 'ACTIVO' OR estado IS NULL)`,
       [sesionId],
