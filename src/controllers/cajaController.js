@@ -525,7 +525,7 @@ const obtenerDetalleIngresos = async (req, res) => {
       return ResponseHelper.error(res, "Sesión no encontrada", 404)
     }
 
-    const [ingresos] = await db.pool.execute(
+    const [ingresosActivos] = await db.pool.execute(
       `SELECT 
         COALESCE(metodo_pago, 'EFECTIVO') as metodo_pago,
         SUM(monto) as total,
@@ -540,11 +540,30 @@ const obtenerDetalleIngresos = async (req, res) => {
       [sesionId],
     )
 
-    // Calcular total
-    const totalIngresos = ingresos.reduce((sum, item) => sum + (Number.parseFloat(item.total) || 0), 0)
+    const [ingresosBrutos] = await db.pool.execute(
+      `SELECT 
+        COALESCE(metodo_pago, 'EFECTIVO') as metodo_pago,
+        SUM(monto) as total,
+        COUNT(*) as cantidad
+      FROM movimientos_caja
+      WHERE sesion_caja_id = ? 
+        AND tipo = 'INGRESO'
+        AND concepto != 'Apertura de caja'
+      GROUP BY metodo_pago
+      ORDER BY total DESC`,
+      [sesionId],
+    )
 
-    // Formatear respuesta
-    const desglose = ingresos.map((item) => ({
+    const totalIngresos = ingresosActivos.reduce((sum, item) => sum + (Number.parseFloat(item.total) || 0), 0)
+    const totalBruto = ingresosBrutos.reduce((sum, item) => sum + (Number.parseFloat(item.total) || 0), 0)
+
+    const desglose = ingresosActivos.map((item) => ({
+      metodo_pago: item.metodo_pago || "EFECTIVO",
+      total: Number.parseFloat(item.total) || 0,
+      cantidad: Number.parseInt(item.cantidad) || 0,
+    }))
+
+    const desgloseBruto = ingresosBrutos.map((item) => ({
       metodo_pago: item.metodo_pago || "EFECTIVO",
       total: Number.parseFloat(item.total) || 0,
       cantidad: Number.parseInt(item.cantidad) || 0,
@@ -552,7 +571,9 @@ const obtenerDetalleIngresos = async (req, res) => {
 
     const resultado = {
       total_general: totalIngresos,
-      desglose: desglose,
+      desglose,
+      total_bruto: totalBruto,
+      desglose_bruto: desgloseBruto,
     }
 
     return ResponseHelper.success(res, resultado)
