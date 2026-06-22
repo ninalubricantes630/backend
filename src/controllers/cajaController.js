@@ -161,29 +161,14 @@ const cerrarCaja = async (req, res) => {
       return ResponseHelper.error(res, "Sesión de caja no encontrada o ya cerrada", 404)
     }
 
-    const montoInicial = Number.parseFloat(sesiones[0].monto_inicial) || 0
-
-    const [movimientos] = await connection.execute(
-      `SELECT 
-        SUM(CASE WHEN tipo = 'INGRESO' AND concepto != 'Apertura de caja' THEN monto ELSE 0 END) as total_ingresos,
-        SUM(CASE WHEN tipo = 'EGRESO' THEN monto ELSE 0 END) as total_egresos,
-        SUM(CASE WHEN tipo = 'INGRESO' AND concepto != 'Apertura de caja' AND metodo_pago = 'EFECTIVO' THEN monto ELSE 0 END) as total_ingresos_efectivo,
-        SUM(CASE WHEN tipo = 'EGRESO' AND metodo_pago = 'EFECTIVO' THEN monto ELSE 0 END) as total_egresos_efectivo
-      FROM movimientos_caja 
-      WHERE sesion_caja_id = ? AND (estado = 'ACTIVO' OR estado IS NULL)`,
-      [sesionId],
-    )
-
-    const totalIngresos = Number.parseFloat(movimientos[0].total_ingresos) || 0
-    const totalEgresos = Number.parseFloat(movimientos[0].total_egresos) || 0
-    const totalIngresosEfectivo = Number.parseFloat(movimientos[0].total_ingresos_efectivo) || 0
-    const totalEgresosEfectivo = Number.parseFloat(movimientos[0].total_egresos_efectivo) || 0
-
-    // Saldo esperado total (sistema completo)
-    const montoEsperadoSistema = montoInicial + totalIngresos - totalEgresos
-    
-    // Saldo esperado en caja física: solo movimientos en efectivo
-    const montoEsperadoCaja = montoInicial + totalIngresosEfectivo - totalEgresosEfectivo
+    const totales = await calcularTotalesSesionCaja(sesionId, connection)
+    const {
+      montoInicial,
+      totalIngresos,
+      totalEgresos,
+      saldoEsperadoSistema: montoEsperadoSistema,
+      saldoEsperadoCaja: montoEsperadoCaja,
+    } = totales
     
     const montoFinalNum = Number.parseFloat(montoFinal)
     const diferencia = montoFinalNum - montoEsperadoCaja
@@ -571,37 +556,83 @@ const obtenerDetalleIngresos = async (req, res) => {
   }
 }
 
+/** Totales de sesión para cierre de caja (misma lógica que cerrarCaja). */
+async function calcularTotalesSesionCaja(sesionId, executor = db.pool) {
+  const [sesiones] = await executor.execute(`SELECT monto_inicial FROM sesiones_caja WHERE id = ?`, [sesionId])
+  if (sesiones.length === 0) return null
+
+  const montoInicial = Number.parseFloat(sesiones[0].monto_inicial) || 0
+
+  const [movimientos] = await executor.execute(
+    `SELECT 
+      SUM(CASE WHEN tipo = 'INGRESO' AND concepto != 'Apertura de caja' THEN monto ELSE 0 END) as total_ingresos,
+      SUM(CASE WHEN tipo = 'EGRESO' THEN monto ELSE 0 END) as total_egresos,
+      SUM(CASE WHEN tipo = 'INGRESO' AND concepto != 'Apertura de caja' AND metodo_pago = 'EFECTIVO' THEN monto ELSE 0 END) as total_ingresos_efectivo,
+      SUM(CASE WHEN tipo = 'EGRESO' AND metodo_pago = 'EFECTIVO' THEN monto ELSE 0 END) as total_egresos_efectivo
+    FROM movimientos_caja 
+    WHERE sesion_caja_id = ? AND (estado = 'ACTIVO' OR estado IS NULL)`,
+    [sesionId],
+  )
+
+  const totalIngresos = Number.parseFloat(movimientos[0].total_ingresos) || 0
+  const totalEgresos = Number.parseFloat(movimientos[0].total_egresos) || 0
+  const totalIngresosEfectivo = Number.parseFloat(movimientos[0].total_ingresos_efectivo) || 0
+  const totalEgresosEfectivo = Number.parseFloat(movimientos[0].total_egresos_efectivo) || 0
+
+  return {
+    montoInicial,
+    totalIngresos,
+    totalEgresos,
+    totalIngresosEfectivo,
+    totalEgresosEfectivo,
+    saldoEsperadoSistema: montoInicial + totalIngresos - totalEgresos,
+    saldoEsperadoCaja: montoInicial + totalIngresosEfectivo - totalEgresosEfectivo,
+  }
+}
+
+// Resumen para el modal de cierre de caja (fuente única de verdad)
+const obtenerResumenCierre = async (req, res) => {
+  try {
+    const { id: sesionId } = req.params
+    const totales = await calcularTotalesSesionCaja(sesionId)
+
+    if (!totales) {
+      return ResponseHelper.error(res, "Sesión no encontrada", 404)
+    }
+
+    return ResponseHelper.success(res, totales)
+  } catch (error) {
+    logger.error("Error al obtener resumen de cierre:", error)
+    return ResponseHelper.error(res, "Error al obtener resumen de cierre", 500)
+  }
+}
+
 // Obtener resumen de caja actual
 const obtenerResumenCaja = async (req, res) => {
   try {
     const { id: sesionId } = req.params
 
-    // Verificar que la sesión existe
-    const [sesiones] = await db.pool.execute(
-      `SELECT monto_inicial FROM sesiones_caja WHERE id = ? AND estado = 'ABIERTA'`,
-      [sesionId],
-    )
-
-    if (sesiones.length === 0) {
+    const totales = await calcularTotalesSesionCaja(sesionId)
+    if (!totales) {
       return ResponseHelper.error(res, "Sesión no encontrada o cerrada", 404)
     }
 
-    const montoInicial = Number.parseFloat(sesiones[0].monto_inicial) || 0
+    const [sesiones] = await db.pool.execute(
+      `SELECT estado FROM sesiones_caja WHERE id = ?`,
+      [sesionId],
+    )
+    if (sesiones[0]?.estado !== "ABIERTA") {
+      return ResponseHelper.error(res, "Sesión no encontrada o cerrada", 404)
+    }
 
     const [resumen] = await db.pool.execute(
       `SELECT 
-        SUM(CASE WHEN tipo = 'INGRESO' AND concepto != 'Apertura de caja' THEN monto ELSE 0 END) as total_ingresos,
-        SUM(CASE WHEN tipo = 'EGRESO' THEN monto ELSE 0 END) as total_egresos,
         COUNT(CASE WHEN tipo = 'INGRESO' AND concepto != 'Apertura de caja' THEN 1 END) as cantidad_ingresos,
         COUNT(CASE WHEN tipo = 'EGRESO' THEN 1 END) as cantidad_egresos
       FROM movimientos_caja 
       WHERE sesion_caja_id = ? AND (estado = 'ACTIVO' OR estado IS NULL)`,
       [sesionId],
     )
-
-    const totalIngresos = Number.parseFloat(resumen[0].total_ingresos) || 0
-    const totalEgresos = Number.parseFloat(resumen[0].total_egresos) || 0
-    const montoActual = montoInicial + totalIngresos - totalEgresos
 
     const [desglose] = await db.pool.execute(
       `SELECT 
@@ -622,14 +653,13 @@ const obtenerResumenCaja = async (req, res) => {
       metodoPago: item.metodo_pago || "EFECTIVO",
       total: Number.parseFloat(item.total) || 0,
       cantidad: Number.parseInt(item.cantidad) || 0,
-      porcentaje: totalIngresos > 0 ? ((Number.parseFloat(item.total) || 0) / totalIngresos) * 100 : 0,
+      porcentaje:
+        totales.totalIngresos > 0 ? ((Number.parseFloat(item.total) || 0) / totales.totalIngresos) * 100 : 0,
     }))
 
     return ResponseHelper.success(res, {
-      montoInicial,
-      totalIngresos,
-      totalEgresos,
-      montoActual,
+      ...totales,
+      montoActual: totales.saldoEsperadoSistema,
       cantidadIngresos: Number.parseInt(resumen[0].cantidad_ingresos) || 0,
       cantidadEgresos: Number.parseInt(resumen[0].cantidad_egresos) || 0,
       desgloseIngresos: desgloseFormateado,
@@ -706,5 +736,6 @@ module.exports = {
   obtenerDetalleSesion,
   obtenerDetalleIngresos,
   obtenerResumenCaja,
+  obtenerResumenCierre,
   obtenerCuentaCorrienteDetalle,
 }
