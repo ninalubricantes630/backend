@@ -167,7 +167,8 @@ const cerrarCaja = async (req, res) => {
       `SELECT 
         SUM(CASE WHEN tipo = 'INGRESO' AND concepto != 'Apertura de caja' THEN monto ELSE 0 END) as total_ingresos,
         SUM(CASE WHEN tipo = 'EGRESO' THEN monto ELSE 0 END) as total_egresos,
-        SUM(CASE WHEN tipo = 'INGRESO' AND concepto != 'Apertura de caja' AND metodo_pago = 'EFECTIVO' THEN monto ELSE 0 END) as total_ingresos_efectivo
+        SUM(CASE WHEN tipo = 'INGRESO' AND concepto != 'Apertura de caja' AND metodo_pago = 'EFECTIVO' THEN monto ELSE 0 END) as total_ingresos_efectivo,
+        SUM(CASE WHEN tipo = 'EGRESO' AND metodo_pago = 'EFECTIVO' THEN monto ELSE 0 END) as total_egresos_efectivo
       FROM movimientos_caja 
       WHERE sesion_caja_id = ? AND (estado = 'ACTIVO' OR estado IS NULL)`,
       [sesionId],
@@ -176,12 +177,13 @@ const cerrarCaja = async (req, res) => {
     const totalIngresos = Number.parseFloat(movimientos[0].total_ingresos) || 0
     const totalEgresos = Number.parseFloat(movimientos[0].total_egresos) || 0
     const totalIngresosEfectivo = Number.parseFloat(movimientos[0].total_ingresos_efectivo) || 0
+    const totalEgresosEfectivo = Number.parseFloat(movimientos[0].total_egresos_efectivo) || 0
 
     // Saldo esperado total (sistema completo)
     const montoEsperadoSistema = montoInicial + totalIngresos - totalEgresos
     
-    // Saldo esperado en caja (solo efectivo)
-    const montoEsperadoCaja = montoInicial + totalIngresosEfectivo - totalEgresos
+    // Saldo esperado en caja física: solo movimientos en efectivo
+    const montoEsperadoCaja = montoInicial + totalIngresosEfectivo - totalEgresosEfectivo
     
     const montoFinalNum = Number.parseFloat(montoFinal)
     const diferencia = montoFinalNum - montoEsperadoCaja
