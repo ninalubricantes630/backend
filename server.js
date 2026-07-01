@@ -172,19 +172,39 @@ app.use("/api/cuentas-corrientes", require("./src/routes/cuentasCorrientesRoutes
 app.use("/api/caja", require("./src/routes/cajaRoutes"))
 app.use("/api/tarjetas", require("./src/routes/tarjetasRoutes")) // Added new route
 
-app.get("/api/health", (req, res) => {
+app.get("/api/health", async (req, res) => {
+  let dbStatus = "unknown"
+  let dbLatencyMs = null
+
+  try {
+    const start = Date.now()
+    await db.pool.execute("SELECT 1")
+    dbLatencyMs = Date.now() - start
+    dbStatus = "connected"
+  } catch (error) {
+    dbStatus = "disconnected"
+    logger.warn("Health check: database unavailable", { error: error.message, code: error.code })
+  }
+
+  const isHealthy = dbStatus === "connected"
   const healthCheck = {
-    status: "OK",
-    message: "Nina Lubricantes API funcionando correctamente",
+    status: isHealthy ? "OK" : "DEGRADED",
+    message: isHealthy
+      ? "Nina Lubricantes API funcionando correctamente"
+      : "API activa pero base de datos no responde",
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
     environment: process.env.NODE_ENV || "development",
     version: process.env.npm_package_version || "1.0.0",
     memory: process.memoryUsage(),
+    database: {
+      status: dbStatus,
+      latencyMs: dbLatencyMs,
+    },
   }
 
-  res.json({
-    success: true,
+  res.status(isHealthy ? 200 : 503).json({
+    success: isHealthy,
     data: healthCheck,
   })
 })
@@ -246,12 +266,21 @@ process.on("SIGINT", async () => {
 
 process.on("uncaughtException", (error) => {
   logger.error("Uncaught Exception", { error: error.message, stack: error.stack })
-  process.exit(1)
+  // Solo terminar en errores realmente fatales; Railway reiniciará el contenedor.
+  if (process.env.NODE_ENV === "production") {
+    setTimeout(() => process.exit(1), 1000)
+  } else {
+    process.exit(1)
+  }
 })
 
 process.on("unhandledRejection", (reason, promise) => {
-  logger.error("Unhandled Rejection", { reason, promise })
-  process.exit(1)
+  logger.error("Unhandled Rejection", {
+    reason: reason?.message || reason,
+    stack: reason?.stack,
+    promise: String(promise),
+  })
+  // No matar el proceso: un error async aislado no debe tumbar todo el servidor.
 })
 
 const startServer = async () => {

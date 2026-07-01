@@ -10,9 +10,9 @@ const createDbConfig = () => {
     charset: "utf8mb4",
     timezone: "local",
     multipleStatements: false,
-    // Mantener conexiones vivas y reducir "Connection lost" (Railway/MySQL)
     enableKeepAlive: true,
     keepAliveInitialDelay: 10000,
+    connectTimeout: 30000,
   }
 
   // If DATABASE_URL is provided (production), parse it
@@ -26,7 +26,7 @@ const createDbConfig = () => {
       database: url.pathname.slice(1), // Remove leading slash
       port: Number.parseInt(url.port) || 3306,
       connectionLimit:
-        Number.parseInt(process.env.DB_CONNECTION_LIMIT) || (process.env.NODE_ENV === "production" ? 50 : 10),
+        Number.parseInt(process.env.DB_CONNECTION_LIMIT) || (process.env.NODE_ENV === "production" ? 15 : 10),
       ssl:
         process.env.NODE_ENV === "production"
           ? {
@@ -94,7 +94,11 @@ const testConnection = async (options = {}) => {
 }
 
 const isConnectionLostError = (err) =>
-  err && (err.code === "PROTOCOL_CONNECTION_LOST" || err.code === "ECONNRESET" || err.code === "ETIMEDOUT")
+  err &&
+  (err.code === "PROTOCOL_CONNECTION_LOST" ||
+    err.code === "ECONNRESET" ||
+    err.code === "ETIMEDOUT" ||
+    err.code === "ECONNREFUSED")
 
 const query = async (sql, params = [], logQuery = false, retried = false) => {
   try {

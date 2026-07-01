@@ -54,8 +54,14 @@ const globalErrorHandler = (err, req, res, next) => {
   }
 
   // Errores de conexión a base de datos
-  if (err.code === "ECONNREFUSED" || err.code === "ER_ACCESS_DENIED_ERROR") {
-    return ResponseHelper.error(res, "Error de conexión a la base de datos", 503, "DATABASE_CONNECTION_ERROR")
+  if (
+    err.code === "ECONNREFUSED" ||
+    err.code === "ER_ACCESS_DENIED_ERROR" ||
+    err.code === "ETIMEDOUT" ||
+    err.code === "PROTOCOL_CONNECTION_LOST" ||
+    err.code === "ECONNRESET"
+  ) {
+    return ResponseHelper.error(res, "Error de conexión a la base de datos. Intenta de nuevo.", 503, "DATABASE_CONNECTION_ERROR")
   }
 
   // Errores de límite de tamaño de payload
