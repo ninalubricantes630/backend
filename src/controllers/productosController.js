@@ -4,33 +4,188 @@ const logger = require("../config/logger")
 const importHelper = require("../utils/importHelper")
 const XLSX = require("xlsx")
 
-/** Búsqueda por nombre (default): solo nombre y descripción en el filtro; orden por relevancia en esos campos. */
+/**
+ * Normaliza el término de búsqueda: espacios colapsados, trim.
+ * Ej: "  wo   120 " → "wo 120"
+ */
+function normalizeSearchTerm(raw) {
+  return String(raw || "")
+    .trim()
+    .replace(/\s+/g, " ")
+}
+
+/** Versión sin espacios para comparar "WO 120" ≈ "WO120". */
+function compactSearchTerm(normalized) {
+  return String(normalized || "").replace(/\s+/g, "").toLowerCase()
+}
+
+function splitSearchTokens(normalized) {
+  return String(normalized || "")
+    .split(" ")
+    .map((t) => t.trim())
+    .filter(Boolean)
+}
+
+function sanitizeLikeToken(value) {
+  // Evita que el usuario inyecte comodines LIKE (% _)
+  return String(value).replace(/[%_\\]/g, "")
+}
+
+/**
+ * Condición SQL para un token:
+ * - Si es numérico (ej. "120"), no debe matchear "121" (boundary por dígitos).
+ * - Si es texto (ej. "wo"), LIKE parcial en nombre/código/descripción.
+ * - Se considera la forma compacta del nombre/código (sin espacios).
+ */
+function buildTokenMatchClause(token, { soloCodigo = false } = {}) {
+  const isNumeric = /^\d+$/.test(token)
+  const params = []
+  const safe = sanitizeLikeToken(token)
+  if (!safe) return { clause: "1=1", params: [] }
+  const likeToken = `%${safe}%`
+
+  if (soloCodigo) {
+    if (isNumeric) {
+      const boundary = `(^|[^0-9])${safe}([^0-9]|$)`
+      const clause = `(
+        LOWER(TRIM(COALESCE(p.codigo, ''))) = LOWER(?)
+        OR LOWER(REPLACE(COALESCE(p.codigo, ''), ' ', '')) = LOWER(?)
+        OR LOWER(COALESCE(p.codigo, '')) REGEXP ?
+        OR LOWER(REPLACE(COALESCE(p.codigo, ''), ' ', '')) REGEXP ?
+      )`
+      params.push(safe, safe, boundary, boundary)
+      return { clause, params }
+    }
+    const clause = `(
+      LOWER(COALESCE(p.codigo, '')) LIKE LOWER(?)
+      OR LOWER(REPLACE(COALESCE(p.codigo, ''), ' ', '')) LIKE LOWER(?)
+    )`
+    params.push(likeToken, likeToken)
+    return { clause, params }
+  }
+
+  if (isNumeric) {
+    // Boundary solo por dígitos: "120" matchea "WO 120" y "WO120", pero NO "WO 121"
+    const boundary = `(^|[^0-9])${safe}([^0-9]|$)`
+    const clause = `(
+      LOWER(TRIM(COALESCE(p.nombre, ''))) = LOWER(?)
+      OR LOWER(TRIM(COALESCE(p.codigo, ''))) = LOWER(?)
+      OR LOWER(REPLACE(COALESCE(p.nombre, ''), ' ', '')) = LOWER(?)
+      OR LOWER(REPLACE(COALESCE(p.codigo, ''), ' ', '')) = LOWER(?)
+      OR LOWER(COALESCE(p.nombre, '')) REGEXP ?
+      OR LOWER(COALESCE(p.codigo, '')) REGEXP ?
+      OR LOWER(REPLACE(COALESCE(p.nombre, ''), ' ', '')) REGEXP ?
+      OR LOWER(REPLACE(COALESCE(p.codigo, ''), ' ', '')) REGEXP ?
+      OR LOWER(COALESCE(p.descripcion, '')) REGEXP ?
+    )`
+    params.push(safe, safe, safe, safe, boundary, boundary, boundary, boundary, boundary)
+    return { clause, params }
+  }
+
+  const clause = `(
+    LOWER(COALESCE(p.nombre, '')) LIKE LOWER(?)
+    OR LOWER(COALESCE(p.codigo, '')) LIKE LOWER(?)
+    OR LOWER(COALESCE(p.descripcion, '')) LIKE LOWER(?)
+    OR LOWER(REPLACE(COALESCE(p.nombre, ''), ' ', '')) LIKE LOWER(?)
+    OR LOWER(REPLACE(COALESCE(p.codigo, ''), ' ', '')) LIKE LOWER(?)
+  )`
+  params.push(likeToken, likeToken, likeToken, likeToken, likeToken)
+  return { clause, params }
+}
+
+/**
+ * Filtro: TODOS los tokens deben matchear (AND).
+ * "wo 120" → token "wo" AND token "120" (boundary), así no aparecen WO160 ni WO 121.
+ */
+function buildProductoSearchFilter(searchTrimmed, { soloCodigo = false } = {}) {
+  const normalized = normalizeSearchTerm(searchTrimmed)
+  if (!normalized) return { sql: "", params: [], normalized: "", compact: "" }
+
+  const tokens = splitSearchTokens(normalized)
+  const compact = compactSearchTerm(normalized)
+  const tokenParts = []
+  const tokenParams = []
+
+  for (const token of tokens) {
+    const { clause, params } = buildTokenMatchClause(token, { soloCodigo })
+    tokenParts.push(clause)
+    tokenParams.push(...params)
+  }
+
+  return {
+    sql: tokenParts.length ? ` AND (${tokenParts.join(" AND ")}) ` : "",
+    params: tokenParams,
+    normalized,
+    compact,
+  }
+}
+
+/**
+ * Ranking estable y profesional:
+ * 0 = match exacto (nombre o código, con/sin espacios)
+ * 1 = empieza con el término
+ * 2 = contiene el término completo como frase
+ * 3 = match por tokens (resto)
+ * Desempate: longitud, nombre, id (determinista).
+ */
 const ORDER_BY_RELEVANCIA_NOMBRE = `
     CASE
       WHEN LOWER(TRIM(COALESCE(p.nombre, ''))) = LOWER(?) THEN 0
+      WHEN LOWER(TRIM(COALESCE(p.codigo, ''))) = LOWER(?) THEN 0
+      WHEN LOWER(REPLACE(COALESCE(p.nombre, ''), ' ', '')) = LOWER(?) THEN 0
+      WHEN LOWER(REPLACE(COALESCE(p.codigo, ''), ' ', '')) = LOWER(?) THEN 0
       WHEN LOWER(p.nombre) LIKE LOWER(CONCAT(?, '%')) THEN 1
-      WHEN LOWER(COALESCE(p.descripcion, '')) LIKE LOWER(CONCAT(?, '%')) THEN 2
+      WHEN LOWER(COALESCE(p.codigo, '')) LIKE LOWER(CONCAT(?, '%')) THEN 1
+      WHEN LOWER(REPLACE(COALESCE(p.nombre, ''), ' ', '')) LIKE LOWER(CONCAT(?, '%')) THEN 1
+      WHEN LOWER(REPLACE(COALESCE(p.codigo, ''), ' ', '')) LIKE LOWER(CONCAT(?, '%')) THEN 1
+      WHEN LOWER(p.nombre) LIKE LOWER(?) THEN 2
+      WHEN LOWER(COALESCE(p.codigo, '')) LIKE LOWER(?) THEN 2
+      WHEN LOWER(REPLACE(COALESCE(p.nombre, ''), ' ', '')) LIKE LOWER(?) THEN 2
+      WHEN LOWER(REPLACE(COALESCE(p.codigo, ''), ' ', '')) LIKE LOWER(?) THEN 2
       ELSE 3
     END,
     CHAR_LENGTH(COALESCE(p.nombre, '')) ASC,
-    p.nombre ASC`
+    p.nombre ASC,
+    p.id ASC`
 
-/** Búsqueda explícita por código: orden por coincidencia en código. */
 const ORDER_BY_RELEVANCIA_CODIGO = `
     CASE
       WHEN LOWER(TRIM(COALESCE(p.codigo, ''))) = LOWER(?) THEN 0
-      WHEN LOWER(p.codigo) LIKE LOWER(CONCAT(?, '%')) THEN 1
-      ELSE 2
+      WHEN LOWER(REPLACE(COALESCE(p.codigo, ''), ' ', '')) = LOWER(?) THEN 0
+      WHEN LOWER(COALESCE(p.codigo, '')) LIKE LOWER(CONCAT(?, '%')) THEN 1
+      WHEN LOWER(REPLACE(COALESCE(p.codigo, ''), ' ', '')) LIKE LOWER(CONCAT(?, '%')) THEN 1
+      WHEN LOWER(COALESCE(p.codigo, '')) LIKE LOWER(?) THEN 2
+      ELSE 3
     END,
     CHAR_LENGTH(COALESCE(p.codigo, '')) ASC,
-    p.nombre ASC`
+    p.nombre ASC,
+    p.id ASC`
 
 const pushParamsOrdenRelevanciaNombre = (params, searchTrimmed) => {
-  params.push(searchTrimmed, searchTrimmed, searchTrimmed)
+  const normalized = normalizeSearchTerm(searchTrimmed)
+  const compact = compactSearchTerm(normalized)
+  const likePhrase = `%${normalized}%`
+  const likeCompact = `%${compact}%`
+  params.push(
+    normalized, // exact nombre
+    normalized, // exact codigo
+    compact, // compact nombre
+    compact, // compact codigo
+    normalized, // starts nombre
+    normalized, // starts codigo
+    compact, // starts compact nombre
+    compact, // starts compact codigo
+    likePhrase, // contains phrase nombre
+    likePhrase, // contains phrase codigo
+    likeCompact, // contains compact nombre
+    likeCompact, // contains compact codigo
+  )
 }
 
 const pushParamsOrdenRelevanciaCodigo = (params, searchTrimmed) => {
-  params.push(searchTrimmed, searchTrimmed)
+  const normalized = normalizeSearchTerm(searchTrimmed)
+  const compact = compactSearchTerm(normalized)
+  params.push(normalized, compact, normalized, compact, `%${normalized}%`)
 }
 
 function busquedaProductosPorCodigo(search_mode) {
@@ -115,20 +270,13 @@ const productosController = {
 
       const searchTrimmed = typeof search === "string" ? search.trim() : ""
 
-      // Filtro de búsqueda: por defecto nombre+descripción; con search_mode=codigo solo código
+      // Filtro de búsqueda tokenizado (AND) + ranking por relevancia
       if (searchTrimmed) {
-        const searchParam = `%${searchTrimmed}%`
-        if (buscarPorCodigo) {
-          query += " AND p.codigo LIKE ?"
-          countQuery += " AND p.codigo LIKE ?"
-          queryParams.push(searchParam)
-          countParams.push(searchParam)
-        } else {
-          query += " AND (p.nombre LIKE ? OR p.descripcion LIKE ?)"
-          countQuery += " AND (p.nombre LIKE ? OR p.descripcion LIKE ?)"
-          queryParams.push(searchParam, searchParam)
-          countParams.push(searchParam, searchParam)
-        }
+        const searchFilter = buildProductoSearchFilter(searchTrimmed, { soloCodigo: buscarPorCodigo })
+        query += searchFilter.sql
+        countQuery += searchFilter.sql
+        queryParams.push(...searchFilter.params)
+        countParams.push(...searchFilter.params)
       }
 
       // Filtro por categoría
@@ -198,6 +346,10 @@ const productosController = {
       } else {
         orderFragments.push("p.created_at DESC")
       }
+      // Desempate estable siempre (evita orden distinto entre corridas)
+      if (!searchTrimmed) {
+        orderFragments.push("p.id ASC")
+      }
 
       query += ` ORDER BY ${orderFragments.join(", ")} LIMIT ${limitNum} OFFSET ${offsetNum}`
 
@@ -211,8 +363,6 @@ const productosController = {
           pushParamsOrdenRelevanciaNombre(queryParams, searchTrimmed)
         }
       }
-
-      console.log("[v0] Query:", query.substring(0, 100) + "...", "Params count:", queryParams.length)
 
       const [productos] = await db.pool.execute(query, queryParams)
       const [countResult] = await db.pool.execute(countQuery, countParams)
@@ -228,7 +378,6 @@ const productosController = {
         },
       })
     } catch (error) {
-      console.error("[v0] Error al obtener productos:", error.message, error.stack)
       logger.error("Error al obtener productos:", error)
       return ResponseHelper.error(res, "Error al obtener productos", 500)
     }
@@ -846,14 +995,9 @@ const productosController = {
 
       // Aplicar los mismos filtros que en getProductos
       if (searchTrimmed) {
-        const searchParam = `%${searchTrimmed}%`
-        if (buscarPorCodigo) {
-          query += " AND p.codigo LIKE ?"
-          queryParams.push(searchParam)
-        } else {
-          query += " AND (p.nombre LIKE ? OR p.descripcion LIKE ?)"
-          queryParams.push(searchParam, searchParam)
-        }
+        const searchFilter = buildProductoSearchFilter(searchTrimmed, { soloCodigo: buscarPorCodigo })
+        query += searchFilter.sql
+        queryParams.push(...searchFilter.params)
       }
 
       if (categoria_id) {
